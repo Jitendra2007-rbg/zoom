@@ -1,5 +1,5 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { User } from '../types';
 
@@ -12,21 +12,23 @@ const LandingPage: React.FC<LandingPageProps> = ({ user, login }) => {
   const [name, setName] = useState('');
   const navigate = useNavigate();
 
+  useEffect(() => {
+    if (user) {
+      navigate('/dashboard');
+    }
+  }, [user, navigate]);
+
   const handleJoin = (e: React.FormEvent) => {
     e.preventDefault();
     if (name.trim()) {
       login(name);
-      navigate('/dashboard');
+      // Navigation will happen via the useEffect above after login updates state
     }
   };
 
-  if (user) {
-    navigate('/dashboard');
-  }
-
   return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-slate-900 via-slate-800 to-indigo-950 px-4">
-      <div className="max-w-4xl w-full text-center space-y-8 animate-in fade-in duration-1000">
+      <div className="max-w-4xl w-full text-center space-y-8 animate-fade-up">
         <div className="flex justify-center mb-4">
           <div className="bg-indigo-600 p-4 rounded-2xl shadow-2xl shadow-indigo-500/20">
             <i className="fas fa-code text-5xl text-white"></i>
@@ -35,9 +37,8 @@ const LandingPage: React.FC<LandingPageProps> = ({ user, login }) => {
         <h1 className="text-6xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 to-cyan-400">
           Codex Collab
         </h1>
-        <p className="text-xl text-slate-300 max-w-2xl mx-auto">
+        <p className="text-xl text-slate-300 max-w-2xl mx-auto font-medium">
           The integrated platform for collaborative coding, real-time learning, and peer-to-peer mentorship. 
-          Built for teams, classrooms, and pair programmers.
         </p>
 
         <div className="mt-12 bg-white/5 backdrop-blur-xl p-8 rounded-3xl border border-white/10 shadow-2xl max-w-md mx-auto">
@@ -50,7 +51,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ user, login }) => {
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="Enter your name..."
-                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-white"
                 required
               />
             </div>
@@ -64,9 +65,9 @@ const LandingPage: React.FC<LandingPageProps> = ({ user, login }) => {
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-16">
-          <FeatureCard icon="fa-video" title="HD Video Calls" desc="Crystal clear audio/video with low latency screensharing." />
-          <FeatureCard icon="fa-users" title="Live Sync IDE" desc="Monaco-powered editor with real-time cursor tracking." />
-          <FeatureCard icon="fa-terminal" title="Sandboxed Run" desc="Execute code in multiple languages safely." />
+          <FeatureCard icon="fa-video" title="HD Video Calls" desc="Low latency streaming with screen sharing." />
+          <FeatureCard icon="fa-users" title="Live Sync IDE" desc="Real-time cursor tracking and shared editing." />
+          <FeatureCard icon="fa-terminal" title="Sandboxed Run" desc="Execute multiple languages in a safe sandbox." />
         </div>
       </div>
     </div>
