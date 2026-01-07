@@ -1,0 +1,8 @@
+{
+  "name": "Codex Collab",
+  "description": "A high-fidelity browser-based collaborative coding and learning platform with live video, shared IDE, and AI-powered code execution simulation.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
