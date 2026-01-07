@@ -1,5 +1,5 @@
 
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@^2.45.0';
+import { createClient } from '@supabase/supabase-js';
 
 const supabaseUrl = 'https://owupzzlazpmchbeuzbjp.supabase.co';
 const supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im93dXB6emxhenBtY2hiZXV6YmpwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc3ODQ0NzYsImV4cCI6MjA4MzM2MDQ3Nn0.ia4i-SLiHs-Y_8POEt4gbL_lI5VcNLKq82JEPpZLg9w';
