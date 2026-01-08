@@ -1,7 +1,7 @@
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
-import { User, Role, ChatMessage, Language } from '../types';
+import { User, Role, Language } from '../types';
 import EditorPanel from '../components/EditorPanel';
 import VideoPanel from '../components/VideoPanel';
 import ChatPanel from '../components/ChatPanel';
@@ -22,10 +22,9 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
   const location = useLocation();
   const queryParams = new URLSearchParams(location.search);
   
-  const initialRole = (queryParams.get('role') as Role) || 'editor';
+  const requestedRole = (queryParams.get('role') as Role) || 'editor';
   const initialDuration = parseInt(queryParams.get('duration') || '60');
 
-  // UI State
   const [activeTab, setActiveTab] = useState<TabType>('editor');
   const [participants, setParticipants] = useState<User[]>([]);
   const [isLocked, setIsLocked] = useState(false);
@@ -33,62 +32,67 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
   const [isPracticeMode, setIsPracticeMode] = useState(false);
   const [sharedCode, setSharedCode] = useState('');
   const [copying, setCopying] = useState(false);
+  const [meetingEnded, setMeetingEnded] = useState(false);
 
-  // Timing
-  const [durationMinutes, setDurationMinutes] = useState(initialDuration);
   const [startTime, setStartTime] = useState(Date.now());
   const [timeLeft, setTimeLeft] = useState(initialDuration * 60);
 
-  // Transcription
   const [transcription, setTranscription] = useState('');
+  const transcriptionTimeoutRef = useRef<number | null>(null);
 
-  // Media
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [micActive, setMicActive] = useState(true);
   const [videoActive, setVideoActive] = useState(true);
 
-  const isHost = user.role === 'host' || initialRole === 'host';
+  // Use local state to track our actual role in this room
+  const [currentRole, setCurrentRole] = useState<Role>(requestedRole);
+  const isHost = currentRole === 'host';
 
   useEffect(() => {
     if (!roomId) return;
 
     const setupRoom = async () => {
-      const { data, error } = await supabase.from('rooms').select('*').eq('id', roomId).single();
+      const { data } = await supabase.from('rooms').select('*').eq('id', roomId).single();
       
-      let currentParticipants: User[] = data?.participants || [];
+      let existingParticipants: User[] = data?.participants || [];
       
       if (data) {
-        if (data.is_ended) { 
-          navigate('/dashboard'); 
-          return; 
+        if (data.is_ended) {
+          setMeetingEnded(true);
+          return;
         }
         setIsLocked(data.is_locked);
         if (data.start_time) setStartTime(data.start_time);
         if (data.active_language) setActiveLanguage(data.active_language as Language);
         if (data.shared_code) setSharedCode(data.shared_code);
+        
+        // Check if user is the real host stored in DB
+        if (data.host_id === user.id) {
+          setCurrentRole('host');
+        } else {
+          setCurrentRole('editor');
+        }
       }
 
-      // Instant Joining Logic
-      const isAlreadyIn = currentParticipants.some(p => p.id === user.id);
+      const isAlreadyIn = existingParticipants.some(p => p.id === user.id);
       if (!isAlreadyIn) {
-        const newUser: User = { ...user, role: isHost ? 'host' : 'editor' };
-        const updatedParticipants = [...currentParticipants, newUser];
+        const myRoleInRoom: Role = (isHost || (data?.host_id === user.id) || (!data && requestedRole === 'host')) ? 'host' : 'editor';
+        const updatedUser: User = { ...user, role: myRoleInRoom };
+        const updatedParticipants = [...existingParticipants, updatedUser];
         
-        // Optimistic UI update
         setParticipants(updatedParticipants);
 
         const updatePayload: any = { participants: updatedParticipants };
-        if (isHost && !data) {
+        if (myRoleInRoom === 'host' && !data) {
           updatePayload.title = queryParams.get('title') || 'Untitled Session';
           updatePayload.host_id = user.id;
           updatePayload.start_time = Date.now();
           updatePayload.duration_minutes = initialDuration;
           updatePayload.is_ended = false;
         }
-        
         await syncRoomState(roomId, updatePayload);
       } else {
-        setParticipants(currentParticipants);
+        setParticipants(existingParticipants);
       }
     };
 
@@ -99,11 +103,13 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'rooms', filter: `id=eq.${roomId}` }, (payload) => {
         const updated = payload.new;
         if (updated.is_ended) {
-          navigate('/dashboard');
+          setMeetingEnded(true);
         } else {
           setIsLocked(updated.is_locked);
           setParticipants(updated.participants || []);
-          if (updated.shared_code !== undefined) setSharedCode(updated.shared_code);
+          if (updated.shared_code !== undefined) {
+            setSharedCode(updated.shared_code);
+          }
         }
       })
       .subscribe();
@@ -111,53 +117,112 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
     navigator.mediaDevices.getUserMedia({ video: true, audio: true })
       .then(stream => {
         setLocalStream(stream);
-        stream.getAudioTracks().forEach(t => t.enabled = micActive);
-        stream.getVideoTracks().forEach(t => t.enabled = videoActive);
+        // Start transcription logic
+        initTranscription(stream);
       })
-      .catch(err => console.error("Media permission denied", err));
+      .catch(err => console.error("Media error", err));
 
     return () => {
       localStream?.getTracks().forEach(t => t.stop());
       supabase.removeChannel(channel);
     };
-  }, [roomId, navigate]);
+  }, [roomId]);
 
-  // Timer
+  const initTranscription = async (stream: MediaStream) => {
+    try {
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
+      
+      const sessionPromise = ai.live.connect({
+        model: 'gemini-2.5-flash-native-audio-preview-12-2025',
+        callbacks: {
+          onmessage: (message: any) => {
+            if (message.serverContent?.inputTranscription) {
+              const text = message.serverContent.inputTranscription.text;
+              setTranscription(text);
+              if (transcriptionTimeoutRef.current) window.clearTimeout(transcriptionTimeoutRef.current);
+              transcriptionTimeoutRef.current = window.setTimeout(() => setTranscription(''), 5000);
+            }
+          }
+        },
+        config: {
+          responseModalities: [Modality.AUDIO],
+          inputAudioTranscription: {},
+        }
+      });
+
+      sessionPromise.then(session => {
+        const source = audioContext.createMediaStreamSource(stream);
+        const processor = audioContext.createScriptProcessor(4096, 1, 1);
+        processor.onaudioprocess = (e) => {
+          const inputData = e.inputBuffer.getChannelData(0);
+          const pcm = new Int16Array(inputData.length);
+          for (let i = 0; i < inputData.length; i++) {
+            pcm[i] = inputData[i] * 32768;
+          }
+          const base64 = btoa(String.fromCharCode(...new Uint8Array(pcm.buffer)));
+          session.sendRealtimeInput({ media: { data: base64, mimeType: 'audio/pcm;rate=16000' } });
+        };
+        source.connect(processor);
+        processor.connect(audioContext.destination);
+      });
+    } catch (e) {
+      console.error("Transcription failed to start", e);
+    }
+  };
+
   useEffect(() => {
     if (initialDuration === 0) return;
     const interval = setInterval(() => {
-      const remaining = (durationMinutes * 60) - Math.floor((Date.now() - startTime) / 1000);
-      const safeRemaining = remaining < 0 ? 0 : remaining;
-      setTimeLeft(safeRemaining);
-      if (remaining <= 0) { 
-        clearInterval(interval); 
-        handleLeave(); 
+      const remaining = (initialDuration * 60) - Math.floor((Date.now() - startTime) / 1000);
+      setTimeLeft(remaining < 0 ? 0 : remaining);
+      if (remaining <= 0) {
+        handleLeave();
+        clearInterval(interval);
       }
     }, 1000);
     return () => clearInterval(interval);
-  }, [startTime, durationMinutes, initialDuration]);
+  }, [startTime]);
 
   const handleLeave = useCallback(async () => {
-    if (isHost) { 
-      if (confirm("End meeting for all participants?")) {
-        await syncRoomState(roomId!, { is_ended: true }); 
+    if (isHost) {
+      if (confirm("End meeting for everyone?")) {
+        await syncRoomState(roomId!, { is_ended: true });
       }
     } else {
       const updated = participants.filter(p => p.id !== user.id);
       await syncRoomState(roomId!, { participants: updated });
     }
     navigate('/dashboard');
-  }, [isHost, roomId, participants, user.id, navigate]);
+  }, [isHost, roomId, participants, user.id]);
 
   const handleCodeChange = (code: string) => {
-    if (isHost) { syncRoomState(roomId!, { shared_code: code }); }
+    if (isHost) {
+      syncRoomState(roomId!, { shared_code: code });
+    }
   };
 
   const handleShare = () => {
-    navigator.clipboard.writeText(window.location.href);
+    const shareUrl = `${window.location.origin}${window.location.pathname}${window.location.hash}`;
+    navigator.clipboard.writeText(shareUrl);
     setCopying(true);
     setTimeout(() => setCopying(false), 2000);
   };
+
+  if (meetingEnded) {
+    return (
+      <div className="h-screen flex flex-col items-center justify-center bg-[#050507] text-white p-6 text-center">
+        <div className="w-20 h-20 bg-red-500/20 rounded-full flex items-center justify-center mb-6">
+          <i className="fas fa-calendar-times text-4xl text-red-500"></i>
+        </div>
+        <h1 className="text-3xl font-bold mb-2">Meeting Ended</h1>
+        <p className="text-slate-400 mb-8 max-w-sm">This session has been closed by the host or the scheduled time has expired.</p>
+        <button onClick={() => navigate('/dashboard')} className="px-8 py-3 bg-indigo-600 rounded-xl font-bold hover:bg-indigo-500 transition-all">
+          Back to Dashboard
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col h-screen bg-[#050507] overflow-hidden text-slate-200" style={{ height: 'calc(var(--vh, 1vh) * 100)' }}>
@@ -169,27 +234,25 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
             </div>
             <span className="font-black text-indigo-400 text-lg uppercase tracking-tighter">Codex</span>
           </div>
-          <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest truncate max-w-[80px] sm:max-w-none bg-white/5 px-2 py-1 rounded border border-white/5">
+          <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest bg-white/5 px-2 py-1 rounded border border-white/5">
             ID: {roomId}
           </span>
         </div>
 
-        <div className="flex items-center gap-3">
-          <button 
-            onClick={handleShare}
-            title="Copy Meeting Link"
-            className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all shadow-xl ${copying ? 'bg-emerald-500 text-white' : 'bg-white/5 text-slate-400 hover:text-white border border-white/10 hover:bg-white/10'}`}
-          >
-            <i className={`fas ${copying ? 'fa-check-circle' : 'fa-share-nodes'}`}></i>
-            <span className="hidden sm:inline">{copying ? 'Copied Link' : 'Share'}</span>
-          </button>
+        {transcription && (
+          <div className="absolute left-1/2 -translate-x-1/2 max-w-[40%] bg-indigo-500/10 border border-indigo-500/30 px-4 py-1.5 rounded-2xl text-[10px] text-indigo-400 font-bold italic truncate shadow-2xl animate-pulse">
+            <i className="fas fa-microphone mr-2"></i> "{transcription}"
+          </div>
+        )}
 
-          {timeLeft > 0 && (
-            <div className={`flex items-center gap-3 px-3 py-1.5 rounded-full border transition-all ${timeLeft < 300 ? 'bg-red-500/10 border-red-500/30 text-red-500 animate-pulse' : 'bg-white/5 border-white/10 text-slate-400'}`}>
-              <i className="fas fa-clock text-[9px]"></i>
-              <span className="font-mono text-xs font-bold">{Math.floor(timeLeft / 60)}:{String(timeLeft % 60).padStart(2, '0')}</span>
-            </div>
-          )}
+        <div className="flex items-center gap-3">
+          <button onClick={handleShare} className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${copying ? 'bg-emerald-500 text-white' : 'bg-white/5 text-slate-400 border border-white/10'}`}>
+            <i className={`fas ${copying ? 'fa-check-circle' : 'fa-share-nodes'}`}></i>
+            <span className="hidden sm:inline">{copying ? 'Copied' : 'Share'}</span>
+          </button>
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full border border-white/10 bg-white/5 text-slate-400">
+            <span className="font-mono text-xs font-bold">{Math.floor(timeLeft / 60)}:{String(timeLeft % 60).padStart(2, '0')}</span>
+          </div>
         </div>
       </header>
 
@@ -200,7 +263,7 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
           <div className="flex-1 min-h-0 overflow-hidden relative bg-[#0b0b0f]">
             {activeTab === 'people' && (
               <div className="h-full overflow-y-auto custom-scrollbar p-6">
-                 <VideoPanel participants={participants} localStream={localStream} isHost={isHost} onMute={() => {}} onRemove={() => {}} />
+                 <VideoPanel participants={participants} localStream={localStream} isHost={isHost} />
               </div>
             )}
             {activeTab === 'editor' && (
@@ -227,10 +290,9 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
           {!isHost && activeTab === 'editor' && (
             <button 
               onClick={() => setIsPracticeMode(!isPracticeMode)}
-              className={`fixed top-20 right-6 z-[60] px-4 py-2 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all shadow-2xl border ${isPracticeMode ? 'bg-amber-500 border-amber-400 text-white animate-pulse' : 'bg-indigo-600 border-indigo-500 text-white'}`}
+              className={`fixed top-20 right-6 z-[60] px-4 py-2 rounded-xl text-[9px] font-black uppercase tracking-widest border ${isPracticeMode ? 'bg-amber-500 border-amber-400 text-white animate-pulse' : 'bg-indigo-600 border-indigo-500 text-white'}`}
             >
-              <i className={`fas ${isPracticeMode ? 'fa-user-graduate' : 'fa-laptop-code'} mr-2`}></i>
-              {isPracticeMode ? 'Practice Active' : 'Switch to Practice'}
+              {isPracticeMode ? 'Practice Mode: ON' : 'Switch to Practice'}
             </button>
           )}
         </main>

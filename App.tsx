@@ -1,12 +1,11 @@
 
-import React, { useState, useEffect, useCallback } from 'react';
-import { HashRouter as Router, Routes, Route, useNavigate, useParams } from 'react-router-dom';
-import { User, Role, Language } from './types';
+import React, { useState, useEffect } from 'react';
+import { HashRouter as Router, Routes, Route } from 'react-router-dom';
+import { User } from './types';
 import LandingPage from './pages/LandingPage';
 import DashboardPage from './pages/DashboardPage';
 import RoomPage from './pages/RoomPage';
 
-// Mock Auth Context Replacement
 export const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(() => {
     const saved = localStorage.getItem('codex_user');
@@ -17,7 +16,7 @@ export const App: React.FC = () => {
     const newUser: User = {
       id: Math.random().toString(36).substr(2, 9),
       name,
-      role: 'host', // Default for demo
+      role: 'editor', // Default role is editor; RoomPage upgrades to host if creating
       color: '#' + Math.floor(Math.random()*16777215).toString(16)
     };
     setUser(newUser);
