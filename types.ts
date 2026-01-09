@@ -24,7 +24,6 @@ export interface ProjectFile {
   content: string;
 }
 
-// Fix: Adding missing SharedFile interface for the resources panel
 export interface SharedFile {
   id: string;
   name: string;
@@ -41,4 +40,11 @@ export enum Language {
   Javascript = 'javascript',
   HTML = 'html',
   React = 'react'
+}
+
+export interface SignalingMessage {
+  from: string;
+  to: string;
+  type: 'offer' | 'answer' | 'candidate';
+  payload: any;
 }
