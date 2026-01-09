@@ -39,10 +39,10 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => {
             tooltip="Files"
           />
           <SidebarItem 
-            icon="fa-sticky-note" 
+            icon="fa-comments" 
             active={activeTab === 'notes'} 
             onClick={() => setActiveTab('notes')} 
-            tooltip="Notes"
+            tooltip="Chat"
           />
         </div>
         <div className="p-4 flex flex-col items-center gap-4">
@@ -73,7 +73,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => {
           onClick={() => setActiveTab('files')} 
         />
         <SidebarItem 
-          icon="fa-sticky-note" 
+          icon="fa-comments" 
           active={activeTab === 'notes'} 
           onClick={() => setActiveTab('notes')} 
         />
@@ -86,7 +86,7 @@ const SidebarItem = ({ icon, active, onClick, tooltip }: { icon: string; active?
   <button 
     onClick={onClick}
     className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all group relative shrink-0 ${
-      active ? 'bg-indigo-600/20 text-indigo-400 border border-indigo-500/30' : 'text-slate-500 hover:text-white hover:bg-white/5'
+      active ? 'bg-indigo-600/20 text-indigo-400 border border-indigo-500/30 shadow-lg' : 'text-slate-500 hover:text-white hover:bg-white/5'
     }`}
   >
     <i className={`fas ${icon} text-sm md:text-base`}></i>

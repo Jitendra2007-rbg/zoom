@@ -10,7 +10,6 @@ import Sidebar, { TabType } from '../components/Sidebar';
 import Whiteboard from '../components/Whiteboard';
 import FilePanel from '../components/FilePanel';
 import { supabase, syncRoomState } from '../services/supabase';
-import { GoogleGenAI, Modality } from "@google/genai";
 
 interface RoomPageProps {
   user: User;
@@ -29,8 +28,8 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
   const [isPracticeMode, setIsPracticeMode] = useState(false);
   const [sharedCode, setSharedCode] = useState('');
   const [meetingEnded, setMeetingEnded] = useState(false);
-  const [startTime, setStartTime] = useState(Date.now());
   const [timeLeft, setTimeLeft] = useState(3600);
+  const [startTime, setStartTime] = useState<number>(Date.now());
 
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStreams, setRemoteStreams] = useState<Record<string, MediaStream>>({});
@@ -42,7 +41,10 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
   const isHost = currentRole === 'host';
 
   const iceConfig = {
-    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' }
+    ]
   };
 
   // 1. Initialize Room & Role
@@ -55,13 +57,19 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
       let dbParticipants: User[] = data?.participants || [];
       const realHostId = data?.host_id;
       
-      // Strict Role Detection
       const myActualRole: Role = (realHostId === user.id || (!data && queryParams.get('role') === 'host')) ? 'host' : 'editor';
       setCurrentRole(myActualRole);
 
       if (data?.is_ended) {
         setMeetingEnded(true);
         return;
+      }
+
+      if (data?.start_time) {
+        setStartTime(data.start_time);
+        const duration = data.duration_minutes || 60;
+        const elapsed = Math.floor((Date.now() - data.start_time) / 1000);
+        setTimeLeft(Math.max(0, (duration * 60) - elapsed));
       }
 
       const isAlreadyIn = dbParticipants.some(p => p.id === user.id);
@@ -75,8 +83,12 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
           payload.title = queryParams.get('title') || 'Untitled Session';
           payload.start_time = Date.now();
           payload.is_ended = false;
+          payload.duration_minutes = parseInt(queryParams.get('duration') || '60');
         }
         await syncRoomState(roomId, payload);
+        setParticipants(updatedParticipants);
+      } else {
+        setParticipants(dbParticipants);
       }
       
       if (data) {
@@ -88,32 +100,35 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
 
     setupRoom();
 
-    // 2. Real-time Listeners
     const roomChannel = supabase
-      .channel(`room:${roomId}`)
+      .channel(`room_db:${roomId}`)
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'rooms', filter: `id=eq.${roomId}` }, (payload) => {
         const updated = payload.new;
-        if (updated.is_ended) setMeetingEnded(true);
+        if (updated.is_ended) {
+          setMeetingEnded(true);
+          return;
+        }
         setIsLocked(updated.is_locked);
-        setParticipants(updated.participants || []);
+        if (updated.participants) setParticipants(updated.participants);
         if (updated.active_language) setActiveLanguage(updated.active_language);
-        if (updated.shared_code !== undefined) setSharedCode(updated.shared_code);
+        if (updated.shared_code !== undefined) {
+          setSharedCode(updated.shared_code);
+        }
       })
       .subscribe();
 
-    // 3. WebRTC Signaling Channel
-    const signalingChannel = supabase.channel(`signaling:${roomId}`);
+    const sigChannel = supabase.channel(`sig:${roomId}`);
     
-    signalingChannel
+    sigChannel
       .on('broadcast', { event: 'signal' }, async ({ payload }: { payload: SignalingMessage }) => {
         if (payload.to !== user.id) return;
-
+        
         if (payload.type === 'offer') {
-          const pc = createPeerConnection(payload.from, signalingChannel);
+          const pc = createPeerConnection(payload.from, sigChannel);
           await pc.setRemoteDescription(new RTCSessionDescription(payload.payload));
           const answer = await pc.createAnswer();
           await pc.setLocalDescription(answer);
-          signalingChannel.send({
+          sigChannel.send({
             type: 'broadcast',
             event: 'signal',
             payload: { from: user.id, to: payload.from, type: 'answer', payload: answer }
@@ -128,41 +143,53 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
       })
       .subscribe();
 
-    // 4. Media Access
     navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then(stream => {
       setLocalStream(stream);
-      // Trigger calls to existing participants
-      participants.forEach(p => {
-        if (p.id !== user.id) {
-          const pc = createPeerConnection(p.id, signalingChannel);
-          pc.createOffer().then(offer => {
-            pc.setLocalDescription(offer);
-            signalingChannel.send({
-              type: 'broadcast',
-              event: 'signal',
-              payload: { from: user.id, to: p.id, type: 'offer', payload: offer }
+      
+      setTimeout(() => {
+        participants.forEach(p => {
+          if (p.id !== user.id) {
+            const pc = createPeerConnection(p.id, sigChannel, stream);
+            pc.createOffer().then(offer => {
+              pc.setLocalDescription(offer);
+              sigChannel.send({
+                type: 'broadcast',
+                event: 'signal',
+                payload: { from: user.id, to: p.id, type: 'offer', payload: offer }
+              });
             });
-          });
-        }
-      });
+          }
+        });
+      }, 1500);
+    }).catch(err => {
+      console.error("Camera/Mic error", err);
     });
 
     return () => {
-      Object.values(peerConnections.current).forEach(pc => pc.close());
+      // Fix: Added explicit type annotation (pc: RTCPeerConnection) to avoid 'unknown' type error during cleanup loop.
+      Object.values(peerConnections.current).forEach((pc: RTCPeerConnection) => pc.close());
       localStream?.getTracks().forEach(t => t.stop());
       supabase.removeChannel(roomChannel);
-      supabase.removeChannel(signalingChannel);
+      supabase.removeChannel(sigChannel);
     };
   }, [roomId]);
 
-  const createPeerConnection = (targetId: string, channel: any) => {
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setTimeLeft(prev => Math.max(0, prev - 1));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const createPeerConnection = (targetId: string, channel: any, stream?: MediaStream) => {
     if (peerConnections.current[targetId]) return peerConnections.current[targetId];
 
     const pc = new RTCPeerConnection(iceConfig);
     peerConnections.current[targetId] = pc;
 
-    if (localStream) {
-      localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+    const streamToUse = stream || localStream;
+    if (streamToUse) {
+      streamToUse.getTracks().forEach(track => pc.addTrack(track, streamToUse));
     }
 
     pc.onicecandidate = (event) => {
@@ -189,18 +216,34 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
     }
   };
 
-  const handleShare = () => {
-    const url = `${window.location.origin}${window.location.pathname}#/room/${roomId}?role=editor`;
-    navigator.clipboard.writeText(url);
-    alert("Meeting link copied to clipboard!");
+  const handleLeave = async () => {
+    if (isHost) {
+      if (confirm("End meeting for all participants?")) {
+        await syncRoomState(roomId!, { is_ended: true });
+        navigate('/dashboard');
+      }
+    } else {
+      const updated = participants.filter(p => p.id !== user.id);
+      await syncRoomState(roomId!, { participants: updated });
+      navigate('/dashboard');
+    }
+  };
+
+  const formatTime = (seconds: number) => {
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return `${m}:${s.toString().padStart(2, '0')}`;
   };
 
   if (meetingEnded) {
     return (
-      <div className="h-screen flex flex-col items-center justify-center bg-[#050507] text-white p-6 text-center">
-        <h1 className="text-4xl font-black mb-4 text-red-500 uppercase">Session Ended</h1>
-        <p className="text-slate-400 mb-8">This meeting has been concluded by the host.</p>
-        <button onClick={() => navigate('/dashboard')} className="px-10 py-4 bg-indigo-600 rounded-2xl font-bold uppercase tracking-widest hover:bg-indigo-500 shadow-2xl">Return Home</button>
+      <div className="h-screen flex flex-col items-center justify-center bg-[#050507] text-white text-center p-4">
+        <div className="w-20 h-20 bg-red-500/20 rounded-full flex items-center justify-center mb-6">
+          <i className="fas fa-calendar-times text-4xl text-red-500"></i>
+        </div>
+        <h1 className="text-4xl font-black mb-4 text-red-500 uppercase tracking-tighter">Meeting Concluded</h1>
+        <p className="text-slate-400 mb-8 max-w-sm">The host has ended this session for everyone. Thank you for using Codex Collab.</p>
+        <button onClick={() => navigate('/dashboard')} className="px-10 py-4 bg-indigo-600 rounded-2xl font-bold hover:bg-indigo-500 transition-all">Go to Dashboard</button>
       </div>
     );
   }
@@ -212,15 +255,15 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
           <div className="w-8 h-8 bg-indigo-600 rounded-xl flex items-center justify-center shadow-lg shadow-indigo-500/30">
              <i className="fas fa-terminal text-white text-xs"></i>
           </div>
-          <span className="font-black text-white text-sm uppercase tracking-tighter">Codex Room <span className="text-indigo-500 ml-1">#{roomId}</span></span>
+          <span className="font-black text-white text-sm uppercase tracking-tighter">Project <span className="text-indigo-500 ml-1">#{roomId}</span></span>
         </div>
 
-        <div className="flex items-center gap-3">
-          <button onClick={handleShare} className="flex items-center gap-2 px-3 py-1.5 rounded-xl text-[10px] font-black uppercase bg-white/5 border border-white/10 text-slate-400 hover:text-white transition-all">
-            <i className="fas fa-share-alt"></i> Share Link
-          </button>
+        <div className="flex items-center gap-4">
+          <div className="px-3 py-1.5 rounded-xl border border-white/10 bg-white/5 text-[10px] font-mono font-black text-indigo-400">
+            {formatTime(timeLeft)}
+          </div>
           <div className="px-3 py-1.5 rounded-full border border-white/10 bg-white/5 text-[10px] font-black uppercase text-slate-500">
-            {isHost ? 'Host' : 'Participant'}
+            {isHost ? <span className="text-indigo-400">Host Mode</span> : 'Participant Mode'}
           </div>
         </div>
       </header>
@@ -237,7 +280,7 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
             )}
             {activeTab === 'editor' && (
               <EditorPanel 
-                user={user} 
+                user={{...user, role: currentRole}} 
                 isLocked={isLocked} 
                 isPracticeMode={isPracticeMode}
                 onLanguageChange={(l) => isHost && syncRoomState(roomId!, { active_language: l })}
@@ -246,8 +289,8 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
               />
             )}
             {activeTab === 'board' && <Whiteboard />}
-            {activeTab === 'files' && <FilePanel roomId={roomId!} currentUser={user} />}
-            {activeTab === 'notes' && <ChatPanel roomId={roomId!} currentUser={user} />}
+            {activeTab === 'files' && <FilePanel roomId={roomId!} currentUser={{...user, role: currentRole}} />}
+            {activeTab === 'notes' && <ChatPanel roomId={roomId!} currentUser={{...user, role: currentRole}} participants={participants} />}
           </div>
           
           {activeTab !== 'people' && (
@@ -255,23 +298,13 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
               <VideoPanel participants={participants} localStream={localStream} remoteStreams={remoteStreams} compact isHost={isHost} />
             </div>
           )}
-
-          {!isHost && activeTab === 'editor' && (
-            <button 
-              onClick={() => setIsPracticeMode(!isPracticeMode)}
-              className={`fixed top-20 right-6 z-[60] px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest border transition-all shadow-2xl ${isPracticeMode ? 'bg-amber-500 border-amber-400 text-white animate-pulse' : 'bg-indigo-600 border-indigo-500 text-white'}`}
-            >
-              <i className={`fas ${isPracticeMode ? 'fa-user-graduate' : 'fa-link-slash'} mr-2`}></i>
-              {isPracticeMode ? 'Practice Mode Active' : 'Disconnect from Host'}
-            </button>
-          )}
         </main>
       </div>
 
       <RoomControls 
         isLocked={isLocked} 
         setIsLocked={(l) => syncRoomState(roomId!, { is_locked: l })}
-        onLeave={() => isHost ? syncRoomState(roomId!, { is_ended: true }) : navigate('/dashboard')}
+        onLeave={handleLeave}
         micActive={micActive}
         videoActive={videoActive}
         toggleMic={() => {setMicActive(!micActive); localStream?.getAudioTracks().forEach(t => t.enabled = !micActive)}}

@@ -44,8 +44,7 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ user, logout }) => {
   };
 
   const startSoloPractice = () => {
-    const roomId = `SOLO-${generateUniqueId()}`;
-    navigate(`/room/${roomId}?mode=practice&role=host&duration=0`);
+    navigate('/practice');
   };
 
   return (
@@ -169,16 +168,6 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ user, logout }) => {
                     />
                   </div>
                 </div>
-                <div className="flex items-center gap-3 bg-slate-900/50 p-4 rounded-xl border border-white/5">
-                  <input 
-                    type="checkbox" 
-                    id="lock"
-                    className="w-4 h-4 rounded accent-indigo-500"
-                    checked={roomSettings.initialLock}
-                    onChange={e => setRoomSettings({...roomSettings, initialLock: e.target.checked})}
-                  />
-                  <label htmlFor="lock" className="text-sm text-slate-300 select-none">Restrict editing to Host only</label>
-                </div>
                 <button type="submit" className="w-full btn-primary py-3 md:py-4 rounded-xl font-bold text-white transition-all transform hover:scale-[1.02] text-sm md:text-base">
                   Create Workspace
                 </button>
@@ -214,17 +203,6 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ user, logout }) => {
           </div>
         )}
       </main>
-
-      <footer className="md:fixed bottom-0 w-full p-6 border-t border-white/5 glass text-center text-xs text-slate-500">
-        <div className="max-w-6xl mx-auto flex flex-col md:flex-row justify-between items-center px-4 md:px-8 gap-4">
-          <p>© 2025 Codex Collab. Professional Workspace.</p>
-          <div className="flex gap-6">
-            <a href="#" className="hover:text-slate-300">API</a>
-            <a href="#" className="hover:text-slate-300">Security</a>
-            <a href="#" className="hover:text-slate-300">Terms</a>
-          </div>
-        </div>
-      </footer>
     </div>
   );
 };
