@@ -6,11 +6,26 @@ const supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYm
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
+let syncTimeout: any = null;
+
 export const syncRoomState = async (roomId: string, state: any) => {
-  const { error } = await supabase
-    .from('rooms')
-    .upsert({ id: roomId, ...state, updated_at: new Date().toISOString() });
-  if (error) console.error('Supabase Sync Error:', error);
+  // Use a tiny debounce for the persistent shared_code to avoid spamming the DB
+  if (state.shared_code !== undefined) {
+    if (syncTimeout) clearTimeout(syncTimeout);
+    syncTimeout = setTimeout(async () => {
+      await supabase
+        .from('rooms')
+        .update({ ...state, updated_at: new Date().toISOString() })
+        .eq('id', roomId);
+    }, 1000);
+  } else {
+    // Immediate sync for critical states (participants, lock, end)
+    const { error } = await supabase
+      .from('rooms')
+      .update({ ...state, updated_at: new Date().toISOString() })
+      .eq('id', roomId);
+    if (error) console.error('Supabase Sync Error:', error);
+  }
 };
 
 export const sendChatMessage = async (roomId: string, userId: string, userName: string, text: string) => {

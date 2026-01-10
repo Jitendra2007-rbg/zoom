@@ -29,35 +29,47 @@ const BOILERPLATES: Record<string, ProjectFile[]> = {
   [Language.React]: [{ name: 'App.jsx', language: 'javascript', content: `export default function App() {\n  return <h1>Hello React</h1>;\n}` }]
 };
 
-const EditorPanel: React.FC<EditorPanelProps> = ({ user, isLocked, isPracticeMode, onTogglePractice, sharedCode, onCodeChange }) => {
+const EditorPanel: React.FC<EditorPanelProps> = ({ user, isLocked, isPracticeMode, sharedCode, onCodeChange, onTogglePractice }) => {
   const [language, setLanguage] = useState<Language>(Language.Javascript);
   const [content, setContent] = useState('');
   const [output, setOutput] = useState('');
   const [isRunning, setIsRunning] = useState(false);
   const [terminalVisible, setTerminalVisible] = useState(false);
-  const lastUpdateRef = useRef<string>('');
+  const lastLocalUpdateRef = useRef<string>('');
 
+  // Update content when sharedCode changes (if not host)
   useEffect(() => {
-    if (!isPracticeMode && sharedCode !== undefined && sharedCode !== content && sharedCode !== lastUpdateRef.current) {
-      if (user.role !== 'host') setContent(sharedCode);
+    if (!isPracticeMode && sharedCode !== undefined && sharedCode !== content && sharedCode !== lastLocalUpdateRef.current) {
+      if (user.role !== 'host') {
+        setContent(sharedCode);
+      }
     }
-  }, [sharedCode, isPracticeMode, user.role]);
+  }, [sharedCode, isPracticeMode, user.role, content]);
 
+  // Set initial content
   useEffect(() => {
-    if (!content && !sharedCode) setContent(BOILERPLATES[language][0].content);
+    if (!content && !sharedCode) {
+      const initial = BOILERPLATES[language][0].content;
+      setContent(initial);
+      if (user.role === 'host') onCodeChange?.(initial);
+    }
   }, []);
 
   const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const val = e.target.value;
     setContent(val);
-    lastUpdateRef.current = val;
-    if (!isPracticeMode && (user.role === 'host' || !isLocked)) onCodeChange?.(val);
+    lastLocalUpdateRef.current = val;
+    
+    // Only send changes if allowed (Host always allowed, Editor allowed if not locked)
+    if (!isPracticeMode && (user.role === 'host' || !isLocked)) {
+      onCodeChange?.(val);
+    }
   };
 
   const handleRun = async () => {
     setIsRunning(true);
     setTerminalVisible(true);
-    setOutput("Executing...");
+    setOutput("Initializing safe sandbox...");
     const result = await executeCode(content, language);
     setOutput(result);
     setIsRunning(false);
@@ -82,17 +94,15 @@ const EditorPanel: React.FC<EditorPanelProps> = ({ user, isLocked, isPracticeMod
             {Object.values(Language).map(l => <option key={l} value={l} className="bg-[#121218]">{l.toUpperCase()}</option>)}
           </select>
           
-          {user.role !== 'host' && (
-            <button 
-              onClick={onTogglePractice}
-              className={`h-6 px-3 rounded-lg text-[8px] font-black uppercase tracking-widest transition-all border ${isPracticeMode ? 'bg-amber-500 border-amber-400 text-white shadow-lg' : 'bg-white/5 border-white/10 text-slate-500 hover:text-white'}`}
-            >
-              <i className="fas fa-flask mr-1"></i> {isPracticeMode ? 'Practice: ON' : 'Join Solo Practice'}
-            </button>
-          )}
+          <button 
+            onClick={onTogglePractice}
+            className={`h-6 px-3 rounded-lg text-[8px] font-black uppercase tracking-widest transition-all border ${isPracticeMode ? 'bg-amber-500 border-amber-400 text-white shadow-lg' : 'bg-white/5 border-white/10 text-slate-500 hover:text-white'}`}
+          >
+            <i className="fas fa-flask mr-1"></i> {isPracticeMode ? 'Solo Mode' : 'Enter Solo'}
+          </button>
         </div>
         <button onClick={handleRun} disabled={isRunning} className="h-7 px-4 rounded-lg text-[9px] font-black bg-emerald-500 text-white uppercase tracking-widest hover:bg-emerald-400 transition-all shadow-lg shadow-emerald-500/20">
-          {isRunning ? <i className="fas fa-spinner fa-spin mr-2"></i> : <i className="fas fa-play mr-2"></i>} Run
+          {isRunning ? <i className="fas fa-spinner fa-spin mr-2"></i> : <i className="fas fa-play mr-2"></i>} Execute
         </button>
       </div>
 
@@ -103,16 +113,17 @@ const EditorPanel: React.FC<EditorPanelProps> = ({ user, isLocked, isPracticeMod
           readOnly={isLocked && !isPracticeMode && user.role !== 'host'}
           spellCheck={false}
           className="flex-1 bg-transparent p-6 text-slate-300 font-mono text-sm leading-relaxed outline-none resize-none custom-scrollbar"
+          placeholder="// Start coding here..."
         />
       </div>
 
       <div className={`absolute bottom-0 inset-x-0 transition-all duration-300 ${terminalVisible ? 'h-1/3' : 'h-0'} overflow-hidden bg-[#050507] border-t border-white/10 flex flex-col z-[100]`}>
         <div className="h-8 flex items-center justify-between px-4 bg-black/40 border-b border-white/5">
-          <span className="text-[9px] font-black text-slate-500 uppercase">Output</span>
+          <span className="text-[9px] font-black text-slate-500 uppercase">Sandbox Output</span>
           <button onClick={() => setTerminalVisible(false)} className="text-slate-600 hover:text-white"><i className="fas fa-times"></i></button>
         </div>
         <div className="flex-1 p-4 font-mono text-xs overflow-y-auto custom-scrollbar text-emerald-400">
-          <pre className="whitespace-pre-wrap">{output || "> Idle"}</pre>
+          <pre className="whitespace-pre-wrap">{output || "> Runtime ready..."}</pre>
         </div>
       </div>
     </div>
