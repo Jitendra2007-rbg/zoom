@@ -20,7 +20,7 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ user, logout }) => {
     title: '',
     maxMembers: 10,
     duration: 60,
-    scheduledTime: ''
+    scheduledTime: '' // This will store the datetime-local string
   });
   
   const [joinCode, setJoinCode] = useState('');
@@ -38,29 +38,43 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ user, logout }) => {
     setIsCreating(true);
     const roomId = generateUniqueId();
     
-    // Establish the room in the database
-    // Note: created_at is handled by the DB default value
-    const { error } = await supabase.from('rooms').insert({
-      id: roomId,
-      host_id: user.id,
-      title: roomSettings.title || 'Untitled Session',
-      participants: [{ ...user, role: 'host' }],
-      is_locked: false,
-      is_ended: false,
-      shared_code: '',
-      max_participants: roomSettings.maxMembers,
-      duration_minutes: roomSettings.duration,
-      scheduled_at: roomSettings.scheduledTime || null
-    });
+    // Convert local datetime string to ISO format for Supabase
+    const scheduledAt = roomSettings.scheduledTime 
+      ? new Date(roomSettings.scheduledTime).toISOString() 
+      : null;
 
-    if (error) {
-      console.error("Creation error:", error);
-      alert("Failed to create room: " + error.message + ". Make sure you ran the SQL query in Supabase!");
+    try {
+      const { error } = await supabase.from('rooms').insert({
+        id: roomId,
+        host_id: user.id,
+        title: roomSettings.title || 'Untitled Session',
+        participants: [{ ...user, role: 'host' }],
+        is_locked: false,
+        is_ended: false,
+        shared_code: '',
+        max_participants: roomSettings.maxMembers,
+        duration_minutes: roomSettings.duration,
+        scheduled_at: scheduledAt
+      });
+
+      if (error) {
+        console.error("Supabase error details:", error);
+        // Special handling for the schema cache error
+        if (error.message.includes('column') || error.message.includes('schema cache')) {
+          alert("DATABASE ERROR: It looks like your Supabase table is missing columns. Please run the SQL query provided to add 'max_participants' and 'scheduled_at'.");
+        } else {
+          alert("Failed to create room: " + error.message);
+        }
+        setIsCreating(false);
+        return;
+      }
+
+      navigate(`/room/${roomId}?role=host`);
+    } catch (err) {
+      console.error("Caught error:", err);
+      alert("An unexpected error occurred during room creation.");
       setIsCreating(false);
-      return;
     }
-
-    navigate(`/room/${roomId}?role=host`);
   };
 
   const handleJoinRoom = async (e: React.FormEvent) => {
@@ -69,7 +83,6 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ user, logout }) => {
     if (!joinCode.trim()) return;
 
     setIsJoining(true);
-    // Validate if room exists and is active
     try {
       const { data, error } = await supabase
         .from('rooms')
@@ -202,13 +215,14 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ user, logout }) => {
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-black text-slate-500 uppercase mb-2 tracking-widest">Schedule (Optional)</label>
+                  <label className="block text-[10px] font-black text-slate-500 uppercase mb-2 tracking-widest">Select Date & Time</label>
                   <input 
                     type="datetime-local" 
                     className="w-full bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 focus:border-indigo-500 outline-none transition-all text-sm text-slate-300"
                     value={roomSettings.scheduledTime}
                     onChange={e => setRoomSettings({...roomSettings, scheduledTime: e.target.value})}
                   />
+                  <p className="mt-1 text-[8px] text-slate-500 font-bold uppercase">Leave blank for immediate session</p>
                 </div>
 
                 <button 
