@@ -18,12 +18,6 @@ export interface ChatMessage {
   created_at: string;
 }
 
-export interface ProjectFile {
-  name: string;
-  language: string;
-  content: string;
-}
-
 export interface SharedFile {
   id: string;
   name: string;
@@ -33,12 +27,26 @@ export interface SharedFile {
   dataUrl?: string;
 }
 
+// Fix: Defined ProjectFile interface used by EditorPanel
+export interface ProjectFile {
+  name: string;
+  language: string;
+  content: string;
+}
+
 export enum Language {
   C = 'c',
+  CPP = 'cpp',
   Java = 'java',
   Python = 'python',
   Javascript = 'javascript',
+  Typescript = 'typescript',
+  Rust = 'rust',
+  Go = 'go',
+  PHP = 'php',
+  Ruby = 'ruby',
   HTML = 'html',
+  CSS = 'css',
   React = 'react'
 }
 

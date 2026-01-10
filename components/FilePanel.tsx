@@ -69,9 +69,13 @@ const FilePanel: React.FC<FilePanelProps> = ({ roomId, currentUser }) => {
       <div className="h-12 flex items-center justify-between px-6 bg-[#121218] border-b border-white/5 shrink-0">
         <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Shared Assets</span>
         <input type="file" ref={fileInputRef} onChange={handleFileChange} className="hidden" />
-        <button onClick={() => fileInputRef.current?.click()} className="h-8 px-4 rounded-xl text-[10px] font-black bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 hover:bg-indigo-500/20 transition-all flex items-center gap-2 uppercase tracking-widest">
-          <i className="fas fa-upload"></i> Share File
-        </button>
+        {isHost ? (
+          <button onClick={() => fileInputRef.current?.click()} className="h-8 px-4 rounded-xl text-[10px] font-black bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 hover:bg-indigo-500/20 transition-all flex items-center gap-2 uppercase tracking-widest">
+            <i className="fas fa-upload"></i> Share File
+          </button>
+        ) : (
+          <span className="text-[8px] font-bold text-slate-600 uppercase">View Only</span>
+        )}
       </div>
       <div className="flex-1 p-4 md:p-6 space-y-3 overflow-y-auto custom-scrollbar">
         {files.length === 0 ? (

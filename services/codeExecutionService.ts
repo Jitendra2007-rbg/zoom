@@ -2,24 +2,32 @@
 /**
  * Real-time Code Execution Service
  * Uses the Piston API (https://emkc.org/api/v2/piston/execute)
- * Support for C, Java, Python, Javascript, etc.
+ * Support for a wide range of industry languages.
  */
 
 const LANGUAGE_MAP: Record<string, { language: string; version: string }> = {
   python: { language: 'python', version: '3.10.0' },
   javascript: { language: 'javascript', version: '18.15.0' },
+  typescript: { language: 'typescript', version: '4.7.4' },
   java: { language: 'java', version: '15.0.2' },
   c: { language: 'c', version: '10.2.1' },
+  cpp: { language: 'cpp', version: '10.2.1' },
+  rust: { language: 'rust', version: '1.68.2' },
+  go: { language: 'go', version: '1.16.2' },
+  php: { language: 'php', version: '8.2.3' },
+  ruby: { language: 'ruby', version: '3.0.1' },
   react: { language: 'javascript', version: '18.15.0' },
-  html: { language: 'javascript', version: '18.15.0' } // HTML simulation
+  html: { language: 'javascript', version: '18.15.0' },
+  css: { language: 'javascript', version: '18.15.0' }
 };
 
 export async function executeCode(code: string, language: string) {
-  const config = LANGUAGE_MAP[language.toLowerCase()] || LANGUAGE_MAP.javascript;
+  const langKey = language.toLowerCase();
+  const config = LANGUAGE_MAP[langKey] || LANGUAGE_MAP.javascript;
 
-  // Simple HTML/React mock if needed, but Piston handles the rest
-  if (language.toLowerCase() === 'html') {
-    return "DOM Rendering Simulation: Successful. (HTML doesn't produce stdout, check browser preview if implemented).";
+  // Visual languages simulation
+  if (['html', 'css'].includes(langKey)) {
+    return `Rendering successful. This language does not produce CLI output. Please switch to the Browser Preview tab if available.`;
   }
 
   try {
@@ -35,11 +43,12 @@ export async function executeCode(code: string, language: string) {
 
     const data = await response.json();
     if (data.run) {
+      if (data.run.stderr) return `Error Output:\n${data.run.stderr}`;
       return data.run.output || "Program executed successfully with no output.";
     }
     return data.message || "Execution error: Unexpected response from compiler.";
   } catch (error) {
     console.error("Execution error:", error);
-    return "Error: Could not connect to the code execution server. Please check your internet connection.";
+    return "Error: Could not connect to the code execution server.";
   }
 }

@@ -4,7 +4,8 @@ import { GoogleGenAI } from "@google/genai";
 // Fix: Always use new GoogleGenAI({ apiKey: process.env.API_KEY }) right before making a call.
 export async function executeCode(code: string, language: string) {
   try {
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
+    // Fix: Directly use process.env.API_KEY as per guidelines.
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     const response = await ai.models.generateContent({
       model: "gemini-3-pro-preview", // Fix: Use gemini-3-pro-preview for coding/logic tasks.
       contents: `Execute the following ${language} code as a terminal emulator. 
@@ -29,7 +30,8 @@ export async function executeCode(code: string, language: string) {
 
 export async function explainCode(code: string) {
   try {
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
+    // Fix: Directly use process.env.API_KEY as per guidelines.
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     const response = await ai.models.generateContent({
       model: "gemini-3-pro-preview", // Fix: Use gemini-3-pro-preview for coding analysis.
       contents: `Explain this code briefly for a junior developer. Highlight potential bugs and optimizations.

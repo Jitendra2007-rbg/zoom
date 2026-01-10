@@ -24,7 +24,6 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
   const [activeTab, setActiveTab] = useState<TabType>('editor');
   const [participants, setParticipants] = useState<User[]>([]);
   const [isLocked, setIsLocked] = useState(false);
-  const [activeLanguage, setActiveLanguage] = useState<Language>(Language.Javascript);
   const [isPracticeMode, setIsPracticeMode] = useState(false);
   const [sharedCode, setSharedCode] = useState('');
   const [meetingEnded, setMeetingEnded] = useState(false);
@@ -39,6 +38,7 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
   
   const peerConnections = useRef<Record<string, RTCPeerConnection>>({});
   const localStreamRef = useRef<MediaStream | null>(null);
+  const whiteboardSyncRef = useRef<any>(null);
 
   const isHost = hostId === user.id;
 
@@ -83,7 +83,17 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
 
     const setup = async () => {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        // High-fidelity audio settings to remove noise and echo feedback
+        // Fix: Removed 'latency' from audio constraints as it is not a recognized property in MediaTrackConstraints
+        const stream = await navigator.mediaDevices.getUserMedia({ 
+          video: { width: 1280, height: 720 }, 
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+            sampleRate: 48000
+          } 
+        });
         setLocalStream(stream);
         localStreamRef.current = stream;
       } catch (err) {
@@ -91,7 +101,6 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
       }
 
       const { data } = await supabase.from('rooms').select('*').eq('id', roomId).single();
-      
       const realHostId = data?.host_id || (queryParams.get('role') === 'host' ? user.id : null);
       setHostId(realHostId);
 
@@ -140,6 +149,7 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
       .subscribe();
 
     const sigChannel = supabase.channel(`sig:${roomId}`);
+    whiteboardSyncRef.current = sigChannel;
     
     sigChannel
       .on('broadcast', { event: 'signal' }, async ({ payload }: { payload: SignalingMessage }) => {
@@ -159,7 +169,9 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
         }
       })
       .on('broadcast', { event: 'typing' }, ({ payload }) => {
-        if (hostId === payload.senderId && payload.senderId !== user.id) setSharedCode(payload.code);
+        if (hostId === payload.senderId && payload.senderId !== user.id) {
+          setSharedCode(payload.code);
+        }
       })
       .subscribe((status) => {
         if (status === 'SUBSCRIBED') {
@@ -184,7 +196,7 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
       supabase.removeChannel(roomChannel);
       supabase.removeChannel(sigChannel);
     };
-  }, [roomId, user.id, createPeerConnection]);
+  }, [roomId, user.id, createPeerConnection, hostId]);
 
   useEffect(() => {
     const timer = setInterval(() => setTimeLeft(prev => Math.max(0, prev - 1)), 1000);
@@ -192,8 +204,8 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
   }, []);
 
   const handleCopyLink = () => {
-    const link = `${window.location.origin}${window.location.pathname}`;
-    navigator.clipboard.writeText(`Join my Codex session!\nCode: ${roomId}\nLink: ${link}`);
+    const link = `${window.location.origin}/#/room/${roomId}`;
+    navigator.clipboard.writeText(`Join Session: ${link}\nCode: ${roomId}`);
     setCopyFeedback(true);
     setTimeout(() => setCopyFeedback(false), 2000);
   };
@@ -206,9 +218,9 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
 
   if (meetingEnded) {
     return (
-      <div className="h-screen flex flex-col items-center justify-center bg-[#050507] text-white text-center p-4">
+      <div className="h-screen flex flex-col items-center justify-center bg-[#050507] text-white">
         <h1 className="text-4xl font-black mb-4 text-red-500 uppercase">Session Ended</h1>
-        <button onClick={() => navigate('/dashboard')} className="px-10 py-4 bg-indigo-600 rounded-2xl font-bold">Dashboard</button>
+        <button onClick={() => navigate('/dashboard')} className="px-10 py-4 bg-indigo-600 rounded-2xl font-bold hover:bg-indigo-500 transition-all">Dashboard</button>
       </div>
     );
   }
@@ -217,10 +229,13 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
     <div className="flex flex-col h-screen bg-[#050507] overflow-hidden text-slate-200">
       <header className="h-14 border-b border-white/5 flex items-center justify-between px-4 glass shrink-0 z-50">
         <div className="flex items-center gap-4">
-          <div className="w-8 h-8 bg-indigo-600 rounded-xl flex items-center justify-center">
+          <div className="w-8 h-8 bg-indigo-600 rounded-xl flex items-center justify-center shadow-lg">
              <i className="fas fa-terminal text-white text-xs"></i>
           </div>
-          <span className="font-black text-white text-sm uppercase">#{roomId}</span>
+          <div className="flex flex-col">
+            <span className="font-black text-white text-[10px] uppercase">Codex Room</span>
+            <span className="font-mono text-[9px] text-slate-500">#{roomId}</span>
+          </div>
         </div>
 
         <div className="flex items-center gap-4">
@@ -238,8 +253,8 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
             </button>
           )}
 
-          <div className="px-3 py-1.5 rounded-full border border-white/10 bg-white/5 text-[10px] font-black uppercase text-slate-500">
-            {isHost ? <span className="text-indigo-400">Host</span> : 'Participant'}
+          <div className="px-3 py-1.5 rounded-full border border-white/10 bg-white/5 text-[10px] font-black uppercase">
+            {isHost ? <span className="text-indigo-400">Host</span> : <span className="text-slate-500">Participant</span>}
           </div>
         </div>
       </header>
@@ -258,6 +273,8 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
                 user={{...user, role: isHost ? 'host' : 'editor'}} 
                 isLocked={isLocked} 
                 sharedCode={sharedCode}
+                isPracticeMode={isPracticeMode}
+                onTogglePractice={() => setIsPracticeMode(!isPracticeMode)}
                 onCodeChange={(code) => {
                   if (isHost) {
                     setSharedCode(code);
@@ -267,7 +284,13 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
                 }}
               />
             )}
-            {activeTab === 'board' && <Whiteboard />}
+            {activeTab === 'board' && (
+              <Whiteboard 
+                isHost={isHost} 
+                roomId={roomId!} 
+                sigChannel={whiteboardSyncRef.current} 
+              />
+            )}
             {activeTab === 'files' && <FilePanel roomId={roomId!} currentUser={{...user, role: isHost ? 'host' : 'editor'}} />}
             {activeTab === 'notes' && <ChatPanel roomId={roomId!} currentUser={{...user, role: isHost ? 'host' : 'editor'}} participants={participants} />}
           </div>
@@ -287,6 +310,7 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
           if (isHost) {
             if (confirm("End for all?")) {
               await syncRoomState(roomId!, { is_ended: true });
+              sessionStorage.removeItem(`codex_session_chat_${roomId}`);
               navigate('/dashboard');
             }
           } else {
