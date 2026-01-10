@@ -43,15 +43,17 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ user, logout }) => {
   const fetchMyRooms = async () => {
     setLoadingRooms(true);
     try {
-      // Fetch rooms where I am host or have participated
+      // Fetch rooms that are not ended
       const { data, error } = await supabase
         .from('rooms')
         .select('id, title, host_id, scheduled_at, max_participants')
         .eq('is_ended', false)
         .order('scheduled_at', { ascending: true, nullsFirst: false });
 
+      if (error) throw error;
+
       if (data) {
-        // Filter to rooms where I am the host (for simplicity in the dashboard view)
+        // Filter to rooms where current user is the host
         setMyRooms(data.filter(r => r.host_id === user.id));
       }
     } catch (err) {
@@ -92,28 +94,25 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ user, logout }) => {
       });
 
       if (error) {
-        console.error("Supabase error:", error);
-        if (error.message.includes('column') || error.message.includes('schema cache')) {
-          alert("DATABASE ERROR: It looks like your Supabase table is missing columns. Please run the SQL query provided to add 'max_participants' and 'scheduled_at'.");
-        } else {
-          alert("Failed to create room: " + error.message);
-        }
+        console.error("Supabase Error:", error);
+        // Comprehensive schema error detection
+        const missingColumn = error.message.match(/'([^']+)'/)?.[1] || 'required';
+        alert(`DATABASE SCHEMA ERROR: The '${missingColumn}' column is missing from your 'rooms' table. \n\nPlease run the "Master Database Fix" SQL script in your Supabase SQL Editor to fix this.`);
         setIsCreating(false);
         return;
       }
 
-      // If scheduled for later, just refresh the list. If now, join it.
       if (!scheduledAt) {
         navigate(`/room/${roomId}?role=host`);
       } else {
         setShowCreateModal(false);
         fetchMyRooms();
-        alert(`Session "${roomSettings.title}" scheduled successfully for ${new Date(scheduledAt).toLocaleString()}.`);
+        alert(`Session "${roomSettings.title}" scheduled successfully!`);
         setIsCreating(false);
         setRoomSettings({ title: '', maxMembers: 10, duration: 60, scheduledTime: '' });
       }
     } catch (err) {
-      console.error("Caught error:", err);
+      console.error("Exception during creation:", err);
       setIsCreating(false);
     }
   };
@@ -223,7 +222,7 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ user, logout }) => {
           </div>
 
           {loadingRooms ? (
-            <div className="py-12 text-center text-slate-500 text-xs font-bold uppercase tracking-widest">Loading your sessions...</div>
+            <div className="py-12 text-center text-slate-500 text-xs font-bold uppercase tracking-widest">Refreshing list...</div>
           ) : myRooms.length === 0 ? (
             <div className="py-20 bg-white/5 border border-dashed border-white/10 rounded-3xl flex flex-col items-center justify-center text-slate-500">
                <i className="fas fa-calendar-plus text-4xl mb-4 opacity-20"></i>
