@@ -27,16 +27,20 @@ const EditorPanel: React.FC<EditorPanelProps> = ({ user, isLocked, isPracticeMod
   const [output, setOutput] = useState('');
   const [isRunning, setIsRunning] = useState(false);
   const [terminalVisible, setTerminalVisible] = useState(false);
+  const lastUpdateRef = useRef<string>('');
 
   // Sync logic: Force content update from host if not in practice mode
   useEffect(() => {
-    if (!isPracticeMode && sharedCode !== undefined) {
-      setContent(sharedCode);
+    if (!isPracticeMode && sharedCode !== undefined && sharedCode !== content && sharedCode !== lastUpdateRef.current) {
+      // Only the editor role should be overwritten by host's sharedCode
+      if (user.role !== 'host') {
+        setContent(sharedCode);
+      }
     }
-  }, [sharedCode, isPracticeMode]);
+  }, [sharedCode, isPracticeMode, user.role]);
 
   useEffect(() => {
-    if (!content) {
+    if (!content && !sharedCode) {
       setContent(BOILERPLATES[language][0].content);
     }
   }, []);
@@ -44,6 +48,7 @@ const EditorPanel: React.FC<EditorPanelProps> = ({ user, isLocked, isPracticeMod
   const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const val = e.target.value;
     setContent(val);
+    lastUpdateRef.current = val;
     // Only the host (or everyone if unlocked) sends updates
     if (!isPracticeMode && (user.role === 'host' || !isLocked)) {
       onCodeChange?.(val);
@@ -53,7 +58,7 @@ const EditorPanel: React.FC<EditorPanelProps> = ({ user, isLocked, isPracticeMod
   const handleRun = async () => {
     setIsRunning(true);
     setTerminalVisible(true);
-    setOutput("Executing on Piston Engine...");
+    setOutput("Executing on Engine...");
     const result = await executeCode(content, language);
     setOutput(result);
     setIsRunning(false);

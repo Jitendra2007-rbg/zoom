@@ -6,8 +6,9 @@ interface VideoPanelProps {
   participants: User[];
   localStream: MediaStream | null;
   remoteStreams?: Record<string, MediaStream>;
+  currentUser: User;
+  hostId: string | null;
   compact?: boolean;
-  isHost?: boolean;
 }
 
 const VolumeVisualizer: React.FC<{ stream: MediaStream | null }> = ({ stream }) => {
@@ -20,7 +21,7 @@ const VolumeVisualizer: React.FC<{ stream: MediaStream | null }> = ({ stream }) 
       const analyser = audioContext.createAnalyser();
       const source = audioContext.createMediaStreamSource(stream);
       source.connect(analyser);
-      analyser.fftSize = 64;
+      analyser.fftSize = 256;
       const dataArray = new Uint8Array(analyser.frequencyBinCount);
 
       const checkVolume = () => {
@@ -28,7 +29,8 @@ const VolumeVisualizer: React.FC<{ stream: MediaStream | null }> = ({ stream }) 
         let sum = 0;
         for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
         const avg = sum / dataArray.length;
-        setLevel(avg > 30 ? (avg / 128) : 0);
+        // Sensitivity threshold
+        setLevel(avg > 25 ? (avg / 128) : 0);
         requestAnimationFrame(checkVolume);
       };
       const rafId = requestAnimationFrame(checkVolume);
@@ -38,67 +40,102 @@ const VolumeVisualizer: React.FC<{ stream: MediaStream | null }> = ({ stream }) 
         audioContext.close();
       };
     } catch (e) {
-      console.error("Visualizer error", e);
+      console.error("Audio analyzer failed", e);
     }
   }, [stream]);
 
-  return (level > 0.05) ? (
-    <div 
-      className="absolute inset-0 border-4 border-indigo-500 rounded-[2rem] pointer-events-none z-10" 
-      style={{ boxShadow: `0 0 ${level * 40}px rgba(99, 102, 241, 0.4)`, opacity: Math.min(1, level + 0.3) }}
-    />
-  ) : null;
+  if (level <= 0.05) return null;
+
+  return (
+    <div className="absolute inset-0 z-10 pointer-events-none overflow-hidden rounded-[2rem]">
+      {/* Voice Beating Glow */}
+      <div 
+        className="absolute inset-0 border-[6px] border-indigo-500/60 rounded-[2rem] transition-all duration-75"
+        style={{ 
+          boxShadow: `inset 0 0 ${level * 60}px rgba(99, 102, 241, 0.8), 0 0 ${level * 40}px rgba(99, 102, 241, 0.4)`,
+          transform: `scale(${1 + (level * 0.05)})`,
+        }}
+      />
+      {/* Pulse Bars */}
+      <div className="absolute bottom-12 right-6 flex items-end gap-1 h-8">
+        {[0, 1, 2].map(i => (
+          <div 
+            key={i} 
+            className="w-1.5 bg-indigo-400 rounded-full transition-all duration-75" 
+            style={{ height: `${Math.random() * level * 100}%`, minHeight: '4px' }} 
+          />
+        ))}
+      </div>
+    </div>
+  );
 };
 
-const VideoFrame: React.FC<{ stream: MediaStream | null; user: User; isMe: boolean; compact?: boolean }> = ({ stream, user, isMe, compact }) => {
+const VideoFrame: React.FC<{ stream: MediaStream | null; user: User; isMe: boolean; isHost: boolean; compact?: boolean }> = ({ stream, user, isMe, isHost, compact }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
     if (videoRef.current && stream) {
       videoRef.current.srcObject = stream;
+      videoRef.current.onloadedmetadata = () => {
+        videoRef.current?.play().catch(() => {});
+      };
     }
   }, [stream]);
+
+  const hasVideo = stream && stream.getVideoTracks().length > 0 && stream.getVideoTracks()[0].enabled;
 
   return (
     <div className={`relative ${compact ? 'h-full aspect-video shrink-0' : 'aspect-video w-full'} bg-[#0e0e12] rounded-3xl border border-white/10 overflow-hidden shadow-2xl transition-all duration-300`}>
       <VolumeVisualizer stream={stream} />
-      {stream && stream.getVideoTracks().length > 0 && stream.getVideoTracks()[0].enabled ? (
-        <video ref={videoRef} autoPlay playsInline muted={isMe} className={`w-full h-full object-cover ${isMe ? 'scale-x-[-1]' : ''} bg-black`} />
+      
+      {hasVideo ? (
+        <video 
+          ref={videoRef} 
+          autoPlay 
+          playsInline 
+          muted={isMe} 
+          className={`w-full h-full object-cover ${isMe ? 'scale-x-[-1]' : ''} bg-black`} 
+        />
       ) : (
         <div className="w-full h-full flex flex-col items-center justify-center bg-slate-900/50">
-          <div className="w-16 h-16 rounded-[1.5rem] flex items-center justify-center text-3xl font-black text-white shadow-2xl" style={{ backgroundColor: user.color }}>
+          <div className="w-16 h-16 rounded-[1.5rem] flex items-center justify-center text-3xl font-black text-white shadow-2xl transition-transform duration-500" style={{ backgroundColor: user.color }}>
             {user.name.charAt(0)}
           </div>
-          <span className="mt-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Camera Off</span>
+          <span className="mt-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+            {stream ? 'Camera Off' : 'Connecting...'}
+          </span>
         </div>
       )}
+
       <div className="absolute bottom-3 left-3 flex items-center gap-2 bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-2xl border border-white/10 z-20">
         <div className={`w-2 h-2 rounded-full ${stream ? 'bg-emerald-500' : 'bg-red-500'}`}></div>
         <span className="text-[10px] font-black text-white uppercase tracking-widest truncate max-w-[100px]">
-          {isMe ? 'You' : user.name} {user.role === 'host' ? '(Host)' : ''}
+          {isMe ? 'You' : user.name} {isHost ? <span className="text-indigo-400 ml-1">(Host)</span> : ''}
         </span>
       </div>
     </div>
   );
 };
 
-const VideoPanel: React.FC<VideoPanelProps> = ({ participants, localStream, remoteStreams = {}, compact }) => {
+const VideoPanel: React.FC<VideoPanelProps> = ({ participants, localStream, remoteStreams = {}, currentUser, hostId, compact }) => {
   const participantMap = new Map();
   participants.forEach(p => participantMap.set(p.id, p));
   const uniqueParticipants = Array.from(participantMap.values());
 
   return (
     <div className={`${compact ? 'flex items-center gap-4 px-4 h-full overflow-x-auto custom-scrollbar' : 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6'}`}>
-      {uniqueParticipants.map((p, idx) => {
-        // Find if this is the local user
-        const isMe = localStream && idx === 0; // Simplified local user identification
-        
+      {uniqueParticipants.map((p) => {
+        const isMe = p.id === currentUser.id;
+        const isHost = p.id === hostId;
+        const stream = isMe ? localStream : (remoteStreams[p.id] || null);
+
         return (
           <VideoFrame 
             key={p.id} 
             user={p} 
             isMe={isMe} 
-            stream={isMe ? localStream : (remoteStreams[p.id] || null)} 
+            isHost={isHost}
+            stream={stream} 
             compact={compact}
           />
         );
