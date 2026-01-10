@@ -42,7 +42,7 @@ const VolumeVisualizer: React.FC<{ stream: MediaStream | null }> = ({ stream }) 
         audioContext.close();
       };
     } catch (e) {
-      console.error("Audio analyzer failed", e);
+      console.error("Visualizer error", e);
     }
   }, [stream]);
 
@@ -51,21 +51,11 @@ const VolumeVisualizer: React.FC<{ stream: MediaStream | null }> = ({ stream }) 
   return (
     <div className="absolute inset-0 z-10 pointer-events-none overflow-hidden rounded-[2rem]">
       <div 
-        className="absolute inset-0 border-[6px] border-indigo-500/60 rounded-[2rem] transition-all duration-75"
+        className="absolute inset-0 border-[4px] border-indigo-500/40 rounded-[2rem] transition-all duration-75"
         style={{ 
-          boxShadow: `inset 0 0 ${level * 60}px rgba(99, 102, 241, 0.8), 0 0 ${level * 40}px rgba(99, 102, 241, 0.4)`,
-          transform: `scale(${1 + (level * 0.05)})`,
+          boxShadow: `inset 0 0 ${level * 40}px rgba(99, 102, 241, 0.6)`,
         }}
       />
-      <div className="absolute bottom-12 right-6 flex items-end gap-1 h-8">
-        {[0, 1, 2].map(i => (
-          <div 
-            key={i} 
-            className="w-1.5 bg-indigo-400 rounded-full transition-all duration-75" 
-            style={{ height: `${Math.random() * level * 100}%`, minHeight: '4px' }} 
-          />
-        ))}
-      </div>
     </div>
   );
 };
@@ -76,20 +66,33 @@ const VideoFrame: React.FC<{ stream: MediaStream | null; user: User; isMe: boole
   useEffect(() => {
     const video = videoRef.current;
     if (video && stream) {
+      console.log(`Setting stream for ${user.name}`, stream.id);
       video.srcObject = stream;
+      
+      const playVideo = async () => {
+        try {
+          await video.play();
+        } catch (err) {
+          console.warn("Autoplay prevented, will play on next user interaction", err);
+          // Add a one-time click listener to play all remote streams if blocked
+          const resume = () => {
+             video.play().catch(() => {});
+             window.removeEventListener('click', resume);
+          };
+          window.addEventListener('click', resume);
+        }
+      };
+
       video.onloadedmetadata = () => {
-        video.play().catch(err => {
-          console.warn("Autoplay was blocked", err);
-          // Retry playback on user interaction if needed
-        });
+        playVideo();
       };
     }
-  }, [stream]);
+  }, [stream, user.name]);
 
   const hasVideo = stream && stream.getVideoTracks().length > 0 && stream.getVideoTracks().some(t => t.enabled);
 
   return (
-    <div className={`relative ${compact ? 'h-full aspect-video shrink-0' : 'aspect-video w-full'} bg-[#0e0e12] rounded-3xl border border-white/10 overflow-hidden shadow-2xl transition-all duration-300`}>
+    <div className={`relative ${compact ? 'h-full aspect-video shrink-0' : 'aspect-video w-full'} bg-[#0e0e12] rounded-[1.5rem] md:rounded-3xl border border-white/10 overflow-hidden shadow-2xl group transition-all`}>
       <VolumeVisualizer stream={stream} />
       
       {hasVideo ? (
@@ -101,22 +104,22 @@ const VideoFrame: React.FC<{ stream: MediaStream | null; user: User; isMe: boole
           className={`w-full h-full object-cover ${isMe ? 'scale-x-[-1]' : ''} bg-black`} 
         />
       ) : (
-        <div className="w-full h-full flex flex-col items-center justify-center bg-slate-900/50">
-          <div className="w-16 h-16 rounded-[1.5rem] flex items-center justify-center text-3xl font-black text-white shadow-2xl transition-transform duration-500" style={{ backgroundColor: user.color }}>
+        <div className="w-full h-full flex flex-col items-center justify-center bg-slate-900/40 backdrop-blur-sm">
+          <div className="w-12 h-12 md:w-16 md:h-16 rounded-2xl flex items-center justify-center text-xl md:text-3xl font-black text-white shadow-2xl" style={{ backgroundColor: user.color }}>
             {user.name.charAt(0)}
           </div>
-          <span className="mt-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">
-            {stream ? 'Camera Off' : 'Connecting...'}
+          <span className="mt-4 text-[9px] font-black text-slate-500 uppercase tracking-widest opacity-60">
+            {stream ? 'Camera Inactive' : 'Buffering...'}
           </span>
-          {/* Even if video is off, we still need to play the audio stream */}
+          {/* Audio must still play if camera is off */}
           <video ref={videoRef} autoPlay playsInline muted={isMe} className="hidden" />
         </div>
       )}
 
-      <div className="absolute bottom-3 left-3 flex items-center gap-2 bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-2xl border border-white/10 z-20">
-        <div className={`w-2 h-2 rounded-full ${stream ? 'bg-emerald-500' : 'bg-red-500'}`}></div>
-        <span className="text-[10px] font-black text-white uppercase tracking-widest truncate max-w-[100px]">
-          {isMe ? 'You' : user.name} {isHost ? <span className="text-indigo-400 ml-1">(Host)</span> : ''}
+      <div className="absolute bottom-3 left-3 flex items-center gap-2 bg-black/40 backdrop-blur-md px-3 py-1.5 rounded-xl border border-white/10 z-20">
+        <div className={`w-1.5 h-1.5 rounded-full ${stream ? 'bg-indigo-500 animate-pulse' : 'bg-red-500'}`}></div>
+        <span className="text-[9px] font-black text-white uppercase tracking-tighter truncate max-w-[80px]">
+          {isMe ? 'Local' : user.name} {isHost ? '★' : ''}
         </span>
       </div>
     </div>
@@ -124,11 +127,11 @@ const VideoFrame: React.FC<{ stream: MediaStream | null; user: User; isMe: boole
 };
 
 const VideoPanel: React.FC<VideoPanelProps> = ({ participants, localStream, remoteStreams = {}, currentUser, hostId, compact }) => {
-  // Use a map to handle duplicates and ensure we always show the current session's people
-  const uniqueParticipants = Array.from(new Map(participants.map(p => [p.id, p])).values());
+  // Fix: Explicitly type uniqueParticipants as User[] to avoid 'unknown' type inference errors in the map callback
+  const uniqueParticipants: User[] = Array.from(new Map(participants.map(p => [p.id, p])).values());
 
   return (
-    <div className={`${compact ? 'flex items-center gap-4 px-4 h-full overflow-x-auto custom-scrollbar' : 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6'}`}>
+    <div className={`${compact ? 'flex items-center gap-4 px-2 h-full overflow-x-auto custom-scrollbar' : 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6'}`}>
       {uniqueParticipants.map((p) => {
         const isMe = p.id === currentUser.id;
         const isHost = p.id === hostId;
