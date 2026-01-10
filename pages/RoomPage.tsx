@@ -45,7 +45,8 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
   const iceConfig = {
     iceServers: [
       { urls: 'stun:stun.l.google.com:19302' },
-      { urls: 'stun:stun1.l.google.com:19302' }
+      { urls: 'stun:stun1.l.google.com:19302' },
+      { urls: 'stun:stun2.l.google.com:19302' }
     ]
   };
 
@@ -72,7 +73,22 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
     };
 
     pc.ontrack = (event) => {
-      setRemoteStreams(prev => ({ ...prev, [targetId]: event.streams[0] }));
+      setRemoteStreams(prev => {
+        // Only set if we don't already have this stream to avoid flickering
+        if (prev[targetId]) return prev;
+        return { ...prev, [targetId]: event.streams[0] };
+      });
+    };
+
+    // Handle connection state changes for cleanup
+    pc.onconnectionstatechange = () => {
+      if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
+        setRemoteStreams(prev => {
+          const next = { ...prev };
+          delete next[targetId];
+          return next;
+        });
+      }
     };
 
     return pc;
@@ -83,8 +99,6 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
 
     const setup = async () => {
       try {
-        // High-fidelity audio settings to remove noise and echo feedback
-        // Fix: Removed 'latency' from audio constraints as it is not a recognized property in MediaTrackConstraints
         const stream = await navigator.mediaDevices.getUserMedia({ 
           video: { width: 1280, height: 720 }, 
           audio: {
@@ -98,40 +112,37 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
         localStreamRef.current = stream;
       } catch (err) {
         console.error("Media failed", err);
+        alert("Camera and Microphone are required for full functionality.");
       }
 
-      const { data } = await supabase.from('rooms').select('*').eq('id', roomId).single();
-      const realHostId = data?.host_id || (queryParams.get('role') === 'host' ? user.id : null);
+      const { data, error } = await supabase.from('rooms').select('*').eq('id', roomId).single();
+      if (error || !data) {
+        navigate('/dashboard');
+        return;
+      }
+
+      const realHostId = data.host_id;
       setHostId(realHostId);
 
-      if (data?.is_ended) {
+      if (data.is_ended) {
         setMeetingEnded(true);
         return;
       }
 
-      let dbParticipants: User[] = data?.participants || [];
+      let dbParticipants: User[] = data.participants || [];
       const isAlreadyIn = dbParticipants.some(p => p.id === user.id);
       
       if (!isAlreadyIn) {
         const updatedUser: User = { ...user, role: realHostId === user.id ? 'host' : 'editor' };
         const updatedParts = [...dbParticipants, updatedUser];
-        const payload: any = { participants: updatedParts };
-        if (realHostId === user.id && !data) {
-          payload.host_id = user.id;
-          payload.title = queryParams.get('title') || 'Untitled Session';
-          payload.start_time = Date.now();
-          payload.is_ended = false;
-        }
-        await syncRoomState(roomId, payload);
+        await syncRoomState(roomId, { participants: updatedParts });
         setParticipants(updatedParts);
       } else {
         setParticipants(dbParticipants);
       }
       
-      if (data) {
-        setIsLocked(data.is_locked);
-        setSharedCode(data.shared_code || '');
-      }
+      setIsLocked(data.is_locked);
+      setSharedCode(data.shared_code || '');
     };
 
     setup();
@@ -154,18 +165,33 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
     sigChannel
       .on('broadcast', { event: 'signal' }, async ({ payload }: { payload: SignalingMessage }) => {
         if (payload.to !== user.id) return;
+        
+        const pc = createPeerConnection(payload.from, sigChannel);
+        
         if (payload.type === 'offer') {
-          const pc = createPeerConnection(payload.from, sigChannel);
           await pc.setRemoteDescription(new RTCSessionDescription(payload.payload));
           const answer = await pc.createAnswer();
           await pc.setLocalDescription(answer);
           sigChannel.send({ type: 'broadcast', event: 'signal', payload: { from: user.id, to: payload.from, type: 'answer', payload: answer } });
         } else if (payload.type === 'answer') {
-          const pc = peerConnections.current[payload.from];
-          if (pc) await pc.setRemoteDescription(new RTCSessionDescription(payload.payload));
+          if (pc.signalingState !== 'stable') {
+            await pc.setRemoteDescription(new RTCSessionDescription(payload.payload));
+          }
         } else if (payload.type === 'candidate') {
-          const pc = peerConnections.current[payload.from];
-          if (pc) await pc.addIceCandidate(new RTCIceCandidate(payload.payload));
+          try {
+            await pc.addIceCandidate(new RTCIceCandidate(payload.payload));
+          } catch (e) {
+            console.warn("Error adding candidate", e);
+          }
+        }
+      })
+      .on('broadcast', { event: 'entry' }, async ({ payload }) => {
+        // Someone new entered, existing participants send an offer
+        if (payload.from !== user.id) {
+          const pc = createPeerConnection(payload.from, sigChannel);
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+          sigChannel.send({ type: 'broadcast', event: 'signal', payload: { from: user.id, to: payload.from, type: 'offer', payload: offer } });
         }
       })
       .on('broadcast', { event: 'typing' }, ({ payload }) => {
@@ -175,18 +201,8 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
       })
       .subscribe((status) => {
         if (status === 'SUBSCRIBED') {
-          setTimeout(async () => {
-            const { data } = await supabase.from('rooms').select('participants').eq('id', roomId).single();
-            const parts = data?.participants || [];
-            for (const p of parts) {
-              if (p.id !== user.id) {
-                const pc = createPeerConnection(p.id, sigChannel);
-                const offer = await pc.createOffer();
-                await pc.setLocalDescription(offer);
-                sigChannel.send({ type: 'broadcast', event: 'signal', payload: { from: user.id, to: p.id, type: 'offer', payload: offer } });
-              }
-            }
-          }, 2000);
+          // Announce entry
+          sigChannel.send({ type: 'broadcast', event: 'entry', payload: { from: user.id } });
         }
       });
 
@@ -196,7 +212,7 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
       supabase.removeChannel(roomChannel);
       supabase.removeChannel(sigChannel);
     };
-  }, [roomId, user.id, createPeerConnection, hostId]);
+  }, [roomId, user.id, createPeerConnection, hostId, navigate]);
 
   useEffect(() => {
     const timer = setInterval(() => setTimeLeft(prev => Math.max(0, prev - 1)), 1000);

@@ -2,6 +2,7 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { User } from '../types';
+import { supabase } from '../services/supabase';
 
 interface DashboardPageProps {
   user: User;
@@ -12,6 +13,7 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ user, logout }) => {
   const navigate = useNavigate();
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showJoinModal, setShowJoinModal] = useState(false);
+  const [isJoining, setIsJoining] = useState(false);
   const [roomSettings, setRoomSettings] = useState({
     title: '',
     maxMembers: 10,
@@ -21,6 +23,7 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ user, logout }) => {
     scheduledTime: ''
   });
   const [joinCode, setJoinCode] = useState('');
+  const [joinError, setJoinError] = useState('');
 
   const generateUniqueId = () => {
     return Array.from(crypto.getRandomValues(new Uint8Array(4)))
@@ -29,18 +32,58 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ user, logout }) => {
       .toUpperCase();
   };
 
-  const handleCreateRoom = (e: React.FormEvent) => {
+  const handleCreateRoom = async (e: React.FormEvent) => {
     e.preventDefault();
     const roomId = generateUniqueId();
+    
+    // Create the room entry in Supabase first to establish host_id
+    const { error } = await supabase.from('rooms').insert({
+      id: roomId,
+      host_id: user.id,
+      title: roomSettings.title || 'Untitled Session',
+      participants: [{ ...user, role: 'host' }],
+      is_locked: false,
+      is_ended: false,
+      shared_code: '',
+      created_at: new Date().toISOString()
+    });
+
+    if (error) {
+      alert("Failed to create room: " + error.message);
+      return;
+    }
+
     const scheduleParam = roomSettings.scheduledTime ? `&scheduled=${new Date(roomSettings.scheduledTime).getTime()}` : '';
-    navigate(`/room/${roomId}?type=${roomSettings.type}&limit=${roomSettings.maxMembers}&title=${encodeURIComponent(roomSettings.title)}&role=host&duration=${roomSettings.duration}${scheduleParam}`);
+    navigate(`/room/${roomId}?role=host&duration=${roomSettings.duration}${scheduleParam}`);
   };
 
-  const handleJoinRoom = (e: React.FormEvent) => {
+  const handleJoinRoom = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (joinCode.trim()) {
-      navigate(`/room/${joinCode.toUpperCase()}?role=editor`);
+    setJoinError('');
+    if (!joinCode.trim()) return;
+
+    setIsJoining(true);
+    // Validate if room exists
+    const { data, error } = await supabase
+      .from('rooms')
+      .select('id, is_ended')
+      .eq('id', joinCode.toUpperCase())
+      .single();
+
+    if (error || !data) {
+      setJoinError('Invalid Room ID. Please check the code and try again.');
+      setIsJoining(false);
+      return;
     }
+
+    if (data.is_ended) {
+      setJoinError('This session has already ended.');
+      setIsJoining(false);
+      return;
+    }
+
+    navigate(`/room/${joinCode.toUpperCase()}?role=editor`);
+    setIsJoining(false);
   };
 
   const startSoloPractice = () => {
@@ -119,55 +162,6 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ user, logout }) => {
                     onChange={e => setRoomSettings({...roomSettings, title: e.target.value})}
                   />
                 </div>
-                
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Duration (Min)</label>
-                    <input 
-                      type="number" 
-                      min="15" 
-                      max="480"
-                      className="w-full bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 outline-none text-sm"
-                      value={roomSettings.duration}
-                      onChange={e => setRoomSettings({...roomSettings, duration: parseInt(e.target.value)})}
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Schedule (Optional)</label>
-                    <input 
-                      type="datetime-local" 
-                      className="w-full bg-slate-900 border border-slate-800 rounded-xl px-4 py-2 outline-none text-[10px]"
-                      value={roomSettings.scheduledTime}
-                      onChange={e => setRoomSettings({...roomSettings, scheduledTime: e.target.value})}
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Type</label>
-                    <select 
-                      className="w-full bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 outline-none text-sm"
-                      value={roomSettings.type}
-                      onChange={e => setRoomSettings({...roomSettings, type: e.target.value})}
-                    >
-                      <option>Team</option>
-                      <option>Class</option>
-                      <option>Personal</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Capacity</label>
-                    <input 
-                      type="number" 
-                      min="1" 
-                      max="50"
-                      className="w-full bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 outline-none text-sm"
-                      value={roomSettings.maxMembers}
-                      onChange={e => setRoomSettings({...roomSettings, maxMembers: parseInt(e.target.value)})}
-                    />
-                  </div>
-                </div>
                 <button type="submit" className="w-full btn-primary py-3 md:py-4 rounded-xl font-bold text-white transition-all transform hover:scale-[1.02] text-sm md:text-base">
                   Create Workspace
                 </button>
@@ -190,13 +184,18 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ user, logout }) => {
                     type="text" 
                     required 
                     placeholder="XXXX-XXXX"
-                    className="w-full bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 focus:border-cyan-500 outline-none transition-all font-mono tracking-widest text-center text-lg uppercase"
+                    className={`w-full bg-slate-900 border rounded-xl px-4 py-3 outline-none transition-all font-mono tracking-widest text-center text-lg uppercase ${joinError ? 'border-red-500' : 'border-slate-800 focus:border-cyan-500'}`}
                     value={joinCode}
                     onChange={e => setJoinCode(e.target.value.toUpperCase())}
                   />
+                  {joinError && <p className="mt-2 text-red-500 text-[10px] font-bold uppercase text-center">{joinError}</p>}
                 </div>
-                <button type="submit" className="w-full bg-gradient-to-r from-cyan-600 to-cyan-500 py-3 md:py-4 rounded-xl font-bold text-white shadow-lg shadow-cyan-600/20 transition-all transform hover:scale-[1.02] text-sm md:text-base">
-                  Join Meeting
+                <button 
+                  type="submit" 
+                  disabled={isJoining}
+                  className="w-full bg-gradient-to-r from-cyan-600 to-cyan-500 py-3 md:py-4 rounded-xl font-bold text-white shadow-lg shadow-cyan-600/20 transition-all transform hover:scale-[1.02] text-sm md:text-base disabled:opacity-50"
+                >
+                  {isJoining ? 'Verifying...' : 'Join Meeting'}
                 </button>
               </form>
             </div>

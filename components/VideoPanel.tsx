@@ -15,7 +15,10 @@ const VolumeVisualizer: React.FC<{ stream: MediaStream | null }> = ({ stream }) 
   const [level, setLevel] = useState(0);
 
   useEffect(() => {
-    if (!stream || stream.getAudioTracks().length === 0) return;
+    if (!stream || stream.getAudioTracks().length === 0) {
+      setLevel(0);
+      return;
+    }
     try {
       const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
       const analyser = audioContext.createAnalyser();
@@ -29,7 +32,6 @@ const VolumeVisualizer: React.FC<{ stream: MediaStream | null }> = ({ stream }) 
         let sum = 0;
         for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
         const avg = sum / dataArray.length;
-        // Sensitivity threshold
         setLevel(avg > 25 ? (avg / 128) : 0);
         requestAnimationFrame(checkVolume);
       };
@@ -48,7 +50,6 @@ const VolumeVisualizer: React.FC<{ stream: MediaStream | null }> = ({ stream }) 
 
   return (
     <div className="absolute inset-0 z-10 pointer-events-none overflow-hidden rounded-[2rem]">
-      {/* Voice Beating Glow */}
       <div 
         className="absolute inset-0 border-[6px] border-indigo-500/60 rounded-[2rem] transition-all duration-75"
         style={{ 
@@ -56,7 +57,6 @@ const VolumeVisualizer: React.FC<{ stream: MediaStream | null }> = ({ stream }) 
           transform: `scale(${1 + (level * 0.05)})`,
         }}
       />
-      {/* Pulse Bars */}
       <div className="absolute bottom-12 right-6 flex items-end gap-1 h-8">
         {[0, 1, 2].map(i => (
           <div 
@@ -74,15 +74,19 @@ const VideoFrame: React.FC<{ stream: MediaStream | null; user: User; isMe: boole
   const videoRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
-    if (videoRef.current && stream) {
-      videoRef.current.srcObject = stream;
-      videoRef.current.onloadedmetadata = () => {
-        videoRef.current?.play().catch(() => {});
+    const video = videoRef.current;
+    if (video && stream) {
+      video.srcObject = stream;
+      video.onloadedmetadata = () => {
+        video.play().catch(err => {
+          console.warn("Autoplay was blocked", err);
+          // Retry playback on user interaction if needed
+        });
       };
     }
   }, [stream]);
 
-  const hasVideo = stream && stream.getVideoTracks().length > 0 && stream.getVideoTracks()[0].enabled;
+  const hasVideo = stream && stream.getVideoTracks().length > 0 && stream.getVideoTracks().some(t => t.enabled);
 
   return (
     <div className={`relative ${compact ? 'h-full aspect-video shrink-0' : 'aspect-video w-full'} bg-[#0e0e12] rounded-3xl border border-white/10 overflow-hidden shadow-2xl transition-all duration-300`}>
@@ -104,6 +108,8 @@ const VideoFrame: React.FC<{ stream: MediaStream | null; user: User; isMe: boole
           <span className="mt-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">
             {stream ? 'Camera Off' : 'Connecting...'}
           </span>
+          {/* Even if video is off, we still need to play the audio stream */}
+          <video ref={videoRef} autoPlay playsInline muted={isMe} className="hidden" />
         </div>
       )}
 
@@ -118,9 +124,8 @@ const VideoFrame: React.FC<{ stream: MediaStream | null; user: User; isMe: boole
 };
 
 const VideoPanel: React.FC<VideoPanelProps> = ({ participants, localStream, remoteStreams = {}, currentUser, hostId, compact }) => {
-  const participantMap = new Map();
-  participants.forEach(p => participantMap.set(p.id, p));
-  const uniqueParticipants = Array.from(participantMap.values());
+  // Use a map to handle duplicates and ensure we always show the current session's people
+  const uniqueParticipants = Array.from(new Map(participants.map(p => [p.id, p])).values());
 
   return (
     <div className={`${compact ? 'flex items-center gap-4 px-4 h-full overflow-x-auto custom-scrollbar' : 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6'}`}>
