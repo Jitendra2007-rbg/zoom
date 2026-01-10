@@ -1,4 +1,3 @@
-
 import React, { useEffect, useRef, useState } from 'react';
 import { User } from '../types';
 
@@ -127,8 +126,8 @@ const VideoFrame: React.FC<{ stream: MediaStream | null; user: User; isMe: boole
 };
 
 const VideoPanel: React.FC<VideoPanelProps> = ({ participants, localStream, remoteStreams = {}, currentUser, hostId, compact }) => {
-  // Fix: Explicitly type uniqueParticipants as User[] to avoid 'unknown' type inference errors in the map callback
-  const uniqueParticipants: User[] = Array.from(new Map(participants.map(p => [p.id, p])).values());
+  // Fix: Explicitly provide generics to the Map constructor to ensure correct User[] inference for unique participants and resolve the unknown type assignment error.
+  const uniqueParticipants: User[] = Array.from(new Map<string, User>(participants.map(p => [p.id, p])).values());
 
   return (
     <div className={`${compact ? 'flex items-center gap-4 px-2 h-full overflow-x-auto custom-scrollbar' : 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6'}`}>

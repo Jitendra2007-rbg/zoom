@@ -77,6 +77,8 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
       setRemoteStreams(prev => {
         const stream = event.streams[0];
         if (!stream) return prev;
+        // Check if we already have this exact stream ID to prevent unnecessary re-renders
+        if (prev[targetId]?.id === stream.id) return prev;
         return { ...prev, [targetId]: stream };
       });
     };
@@ -88,6 +90,10 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
           delete next[targetId];
           return next;
         });
+        if (peerConnections.current[targetId]) {
+          peerConnections.current[targetId].close();
+          delete peerConnections.current[targetId];
+        }
       }
     };
 
@@ -115,7 +121,7 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
       }
 
       // 2. Room Validation
-      const { data, error } = await supabase.from('rooms').select('*').eq('id', roomId).single();
+      const { data, error } = await supabase.from('rooms').select('*').eq('id', roomId).maybeSingle();
       if (error || !data) {
         alert("Invalid Room ID. Returning to dashboard.");
         navigate('/dashboard');
@@ -128,7 +134,7 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
         return;
       }
 
-      // 3. Register presence
+      // 3. Register presence (Sync with DB)
       let dbParticipants: User[] = data.participants || [];
       const isAlreadyIn = dbParticipants.some(p => p.id === user.id);
       
@@ -184,14 +190,15 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
           }
         } else if (payload.type === 'candidate') {
           try {
-            await pc.addIceCandidate(new RTCIceCandidate(payload.payload));
+            if (pc.remoteDescription) {
+              await pc.addIceCandidate(new RTCIceCandidate(payload.payload));
+            }
           } catch (e) {
             console.warn("ICE error", e);
           }
         }
       })
       .on('broadcast', { event: 'announce' }, async ({ payload }) => {
-        // Only initiate if we are the one already in the room
         if (payload.userId !== user.id) {
           const pc = createPeerConnection(payload.userId, sigChannel);
           const offer = await pc.createOffer();
@@ -206,7 +213,6 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
       })
       .subscribe((status) => {
         if (status === 'SUBSCRIBED') {
-          // Tell everyone I'm here
           sigChannel.send({ type: 'broadcast', event: 'announce', payload: { userId: user.id } });
         }
       });
@@ -226,7 +232,7 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
 
   const handleCopyLink = () => {
     const link = `${window.location.origin}/#/room/${roomId}`;
-    navigator.clipboard.writeText(`Join Codex: ${link}\nCode: ${roomId}`);
+    navigator.clipboard.writeText(`Join Session: ${link}\nCode: ${roomId}`);
     setCopyFeedback(true);
     setTimeout(() => setCopyFeedback(false), 2000);
   };

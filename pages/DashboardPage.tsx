@@ -39,6 +39,7 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ user, logout }) => {
     const roomId = generateUniqueId();
     
     // Establish the room in the database
+    // Note: created_at is handled by the DB default value
     const { error } = await supabase.from('rooms').insert({
       id: roomId,
       host_id: user.id,
@@ -49,12 +50,12 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ user, logout }) => {
       shared_code: '',
       max_participants: roomSettings.maxMembers,
       duration_minutes: roomSettings.duration,
-      scheduled_at: roomSettings.scheduledTime || null,
-      created_at: new Date().toISOString()
+      scheduled_at: roomSettings.scheduledTime || null
     });
 
     if (error) {
-      alert("Failed to create room: " + error.message);
+      console.error("Creation error:", error);
+      alert("Failed to create room: " + error.message + ". Make sure you ran the SQL query in Supabase!");
       setIsCreating(false);
       return;
     }
@@ -69,32 +70,37 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ user, logout }) => {
 
     setIsJoining(true);
     // Validate if room exists and is active
-    const { data, error } = await supabase
-      .from('rooms')
-      .select('id, is_ended, participants, max_participants')
-      .eq('id', joinCode.toUpperCase().trim())
-      .single();
+    try {
+      const { data, error } = await supabase
+        .from('rooms')
+        .select('id, is_ended, participants, max_participants')
+        .eq('id', joinCode.toUpperCase().trim())
+        .maybeSingle();
 
-    if (error || !data) {
-      setJoinError('Room not found. Please check the code.');
+      if (error || !data) {
+        setJoinError('Room not found. Please check the code.');
+        setIsJoining(false);
+        return;
+      }
+
+      if (data.is_ended) {
+        setJoinError('This session has already ended.');
+        setIsJoining(false);
+        return;
+      }
+
+      if (data.participants && data.participants.length >= (data.max_participants || 100)) {
+        setJoinError('Room is full.');
+        setIsJoining(false);
+        return;
+      }
+
+      navigate(`/room/${data.id}?role=editor`);
+    } catch (err) {
+      setJoinError('Connection error. Try again.');
+    } finally {
       setIsJoining(false);
-      return;
     }
-
-    if (data.is_ended) {
-      setJoinError('This session has already ended.');
-      setIsJoining(false);
-      return;
-    }
-
-    if (data.participants && data.participants.length >= (data.max_participants || 100)) {
-      setJoinError('Room is full.');
-      setIsJoining(false);
-      return;
-    }
-
-    navigate(`/room/${data.id}?role=editor`);
-    setIsJoining(false);
   };
 
   return (
@@ -150,7 +156,6 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ user, logout }) => {
           />
         </div>
 
-        {/* Create Modal */}
         {showCreateModal && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/90 backdrop-blur-md">
             <div className="bg-[#0e0e12] w-full max-w-md rounded-3xl border border-white/10 shadow-2xl p-6 md:p-8 animate-fade-up overflow-y-auto max-h-[90vh] custom-scrollbar">
@@ -218,7 +223,6 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ user, logout }) => {
           </div>
         )}
 
-        {/* Join Modal */}
         {showJoinModal && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/90 backdrop-blur-md">
             <div className="bg-[#0e0e12] w-full max-w-sm rounded-3xl border border-white/10 shadow-2xl p-8 animate-fade-up">
