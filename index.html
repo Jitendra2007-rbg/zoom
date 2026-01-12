@@ -5,7 +5,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Codex Collab - High-Performance Collaborative IDE</title>
-    <!-- Favicon to prevent 404 -->
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>💻</text></svg>">
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -22,10 +21,10 @@
             background-color: var(--bg-deep);
             color: #f8fafc;
             margin: 0;
-            overflow: hidden;
             font-family: 'Plus Jakarta Sans', sans-serif;
             height: 100vh;
             height: calc(var(--vh, 1vh) * 100);
+            /* Removed overflow: hidden from body to allow container-based scrolling */
         }
         .font-mono {
             font-family: 'JetBrains Mono', monospace !important;
@@ -35,25 +34,24 @@
             backdrop-filter: blur(12px);
             border: 1px solid rgba(255, 255, 255, 0.08);
         }
-        .btn-primary {
-            background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
-            box-shadow: 0 4px 15px rgba(99, 102, 241, 0.3);
-        }
         .custom-scrollbar::-webkit-scrollbar {
-            width: 4px;
-            height: 4px;
+            width: 6px;
+            height: 6px;
         }
         .custom-scrollbar::-webkit-scrollbar-track {
             background: transparent;
         }
         .custom-scrollbar::-webkit-scrollbar-thumb {
-            background: rgba(255, 255, 255, 0.1);
+            background: rgba(255, 255, 255, 0.15);
             border-radius: 10px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.25);
         }
         
         @media (max-width: 768px) {
             input, textarea, select {
-                font-size: 16px !important;
+                font-size: 16px !important; /* Prevents iOS zoom */
             }
         }
 
@@ -64,6 +62,12 @@
         .animate-fade-up {
             animation: fadeUp 0.4s ease-out forwards;
         }
+        
+        /* Ensure specific containers are scrollable */
+        .scroll-container {
+            overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
+        }
     </style>
     <script>
         const setVh = () => {
@@ -71,6 +75,7 @@
             document.documentElement.style.setProperty('--vh', `${vh}px`);
         };
         window.addEventListener('resize', setVh);
+        window.addEventListener('orientationchange', setVh);
         setVh();
     </script>
 <script type="importmap">
@@ -86,8 +91,8 @@
 }
 </script>
 </head>
-<body>
-    <div id="root"></div>
+<body class="overflow-hidden">
+    <div id="root" class="h-full w-full"></div>
     <script type="module" src="./index.tsx"></script>
 </body>
 </html>

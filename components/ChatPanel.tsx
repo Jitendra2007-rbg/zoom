@@ -69,6 +69,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ roomId, currentUser, participants
     const broadcastChannel = supabase.channel(`private_chat:${roomId}`);
     broadcastChannel
       .on('broadcast', { event: 'private_msg' }, ({ payload }) => {
+        // Only store if I am the sender or the recipient
         if (payload.recipient_id === currentUser.id || payload.user_id === currentUser.id) {
           const privateMsg = { ...payload, is_private: true };
           setMessages(prev => {
@@ -88,7 +89,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ roomId, currentUser, participants
 
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-  }, [messages]);
+  }, [messages, recipient]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -112,6 +113,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ roomId, currentUser, participants
         payload: privateMsg
       });
 
+      // Local update for private messages (broadcast doesn't loop back to sender automatically)
       setMessages(prev => {
         const updated = [...prev, { ...privateMsg, is_private: true }];
         sessionStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
@@ -121,6 +123,19 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ roomId, currentUser, participants
     
     setInputText('');
   };
+
+  // Filter messages based on currently selected recipient (Everyone vs Private)
+  const filteredMessages = messages.filter(msg => {
+    if (recipient === 'everyone') {
+      // Show ONLY public messages (those without a recipient_id and not explicitly private)
+      return !msg.recipient_id && !msg.is_private;
+    } else {
+      // Show ONLY messages belonging to the private thread between current user and selected recipient
+      const isFromMeToTarget = msg.user_id === currentUser.id && msg.recipient_id === recipient;
+      const isFromTargetToMe = msg.user_id === recipient && msg.recipient_id === currentUser.id;
+      return isFromMeToTarget || isFromTargetToMe;
+    }
+  });
 
   const recipientUser = participants.find(p => p.id === recipient);
 
@@ -167,11 +182,9 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ roomId, currentUser, participants
         </div>
 
         <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
-          {messages.map((msg, idx) => {
+          {filteredMessages.map((msg, idx) => {
             const isMe = msg.user_id === currentUser.id;
             const isPrivate = msg.is_private || !!msg.recipient_id;
-            
-            if (isPrivate && msg.user_id !== currentUser.id && msg.recipient_id !== currentUser.id) return null;
             
             return (
               <div key={msg.id || idx} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} animate-fade-up`}>
@@ -190,6 +203,12 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ roomId, currentUser, participants
               </div>
             );
           })}
+          {filteredMessages.length === 0 && (
+            <div className="h-full flex flex-col items-center justify-center opacity-20 text-slate-500">
+              <i className="fas fa-comment-slash text-2xl mb-2"></i>
+              <span className="text-[10px] font-bold uppercase tracking-widest">No messages yet</span>
+            </div>
+          )}
         </div>
 
         <div className="p-3 bg-black/40 border-t border-white/5 shrink-0 mb-14 md:mb-0">

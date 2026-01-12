@@ -9,43 +9,61 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 let syncTimeout: any = null;
 
 export const syncRoomState = async (roomId: string, state: any) => {
-  // Use a tiny debounce for the persistent shared_code to avoid spamming the DB
   if (state.shared_code !== undefined) {
     if (syncTimeout) clearTimeout(syncTimeout);
     syncTimeout = setTimeout(async () => {
-      await supabase
+      try {
+        await supabase
+          .from('rooms')
+          .update({ ...state, updated_at: new Date().toISOString() })
+          .eq('id', roomId);
+      } catch (e) {
+        console.error("Shared code sync error:", e);
+      }
+    }, 1200);
+  } else {
+    try {
+      const { error } = await supabase
         .from('rooms')
         .update({ ...state, updated_at: new Date().toISOString() })
         .eq('id', roomId);
-    }, 1000);
-  } else {
-    // Immediate sync for critical states (participants, lock, end)
-    const { error } = await supabase
-      .from('rooms')
-      .update({ ...state, updated_at: new Date().toISOString() })
-      .eq('id', roomId);
-    if (error) console.error('Supabase Sync Error:', error);
+      if (error) console.error('Supabase Sync Error:', error);
+    } catch (e) {
+      console.error("General sync error:", e);
+    }
   }
 };
 
 export const sendChatMessage = async (roomId: string, userId: string, userName: string, text: string) => {
-  const { error } = await supabase
-    .from('messages')
-    .insert({ room_id: roomId, user_id: userId, user_name: userName, text: text });
-  if (error) console.error('Chat Error:', error);
+  try {
+    const { error } = await supabase
+      .from('messages')
+      .insert({ room_id: roomId, user_id: userId, user_name: userName, text: text });
+    if (error) throw error;
+  } catch (err) {
+    console.error('Chat Error:', err);
+  }
 };
 
 export const uploadRoomFile = async (roomId: string, fileData: any) => {
-  const { error } = await supabase
-    .from('files')
-    .insert({ room_id: roomId, ...fileData });
-  if (error) console.error('File Upload Error:', error);
+  try {
+    const { error } = await supabase
+      .from('files')
+      .insert({ room_id: roomId, ...fileData });
+    if (error) throw error;
+  } catch (err) {
+    console.error('File Upload Error:', err);
+  }
 };
 
 export const deleteRoomFile = async (fileId: string) => {
-  const { error } = await supabase
-    .from('files')
-    .delete()
-    .eq('id', fileId);
-  if (error) console.error('File Delete Error:', error);
+  try {
+    const { error } = await supabase
+      .from('files')
+      .delete()
+      .eq('id', fileId);
+    if (error) throw error;
+  } catch (err) {
+    console.error('File Delete Error:', err);
+  }
 };

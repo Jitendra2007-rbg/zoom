@@ -22,12 +22,11 @@ export interface SharedFile {
   id: string;
   name: string;
   size: string;
-  uploadedBy: string;
-  timestamp: number;
-  dataUrl?: string;
+  uploaded_by: string;
+  created_at: string;
+  data_url: string;
 }
 
-// Fix: Defined ProjectFile interface used by EditorPanel
 export interface ProjectFile {
   name: string;
   language: string;

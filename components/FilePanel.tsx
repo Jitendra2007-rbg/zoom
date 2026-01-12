@@ -1,7 +1,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { SharedFile, User } from '../types';
-import { supabase, uploadRoomFile, deleteRoomFile } from '../services/supabase';
+import { supabase } from '../services/supabase';
 
 interface FilePanelProps {
   roomId: string;
@@ -10,107 +10,107 @@ interface FilePanelProps {
 
 const FilePanel: React.FC<FilePanelProps> = ({ roomId, currentUser }) => {
   const [files, setFiles] = useState<SharedFile[]>([]);
+  const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const isHost = currentUser.role === 'host';
 
+  const fetchFiles = async () => {
+    const { data, error } = await supabase
+      .from('files')
+      .select('*')
+      .eq('room_id', roomId)
+      .order('created_at', { ascending: false });
+    
+    if (data) setFiles(data);
+  };
+
   useEffect(() => {
-    const fetchFiles = async () => {
-      const { data } = await supabase.from('files').select('*').eq('room_id', roomId).order('created_at', { ascending: false });
-      if (data) setFiles(data);
-    };
-
     fetchFiles();
-
-    const channel = supabase
-      .channel(`files:${roomId}`)
+    const channel = supabase.channel(`f_${roomId}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'files', filter: `room_id=eq.${roomId}` }, fetchFiles)
       .subscribe();
-
     return () => { supabase.removeChannel(channel); };
   }, [roomId]);
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      if (file.size > 5 * 1024 * 1024) return alert("Max size 5MB");
+      setIsUploading(true);
       const reader = new FileReader();
       reader.onload = async (event) => {
         const dataUrl = event.target?.result as string;
-        const newFile = {
+        await supabase.from('files').insert({
+          room_id: roomId,
           name: file.name,
-          size: (file.size / 1024 / 1024).toFixed(2) + ' MB',
-          uploadedBy: currentUser.name,
-          dataUrl: dataUrl
-        };
-        await uploadRoomFile(roomId, newFile);
+          size: (file.size / 1024).toFixed(1) + ' KB',
+          uploaded_by: currentUser.name,
+          data_url: dataUrl
+        });
+        setIsUploading(false);
+        if (fileInputRef.current) fileInputRef.current.value = '';
       };
       reader.readAsDataURL(file);
     }
   };
 
-  const handleDelete = async (fileId: string) => {
-    if (confirm("Delete this shared resource?")) {
-      await deleteRoomFile(fileId);
+  const handleDownload = (file: SharedFile) => {
+    try {
+      // Create a Blob from the data URL for more reliable downloads
+      const parts = file.data_url.split(',');
+      const byteString = atob(parts[1]);
+      const mimeString = parts[0].split(':')[1].split(';')[0];
+      const ab = new ArrayBuffer(byteString.length);
+      const ia = new Uint8Array(ab);
+      for (let i = 0; i < byteString.length; i++) ia[i] = byteString.charCodeAt(i);
+      
+      const blob = new Blob([ab], { type: mimeString });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = file.name;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (e) {
+      alert("Download error.");
     }
   };
 
-  const handleDownload = (file: SharedFile) => {
-    if (!file.dataUrl) return;
-    const link = document.createElement('a');
-    link.href = file.dataUrl;
-    link.download = file.name;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
-
   return (
-    <div className="h-full flex flex-col bg-[#0b0b0f]">
-      <div className="h-12 flex items-center justify-between px-6 bg-[#121218] border-b border-white/5 shrink-0">
-        <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Shared Assets</span>
-        <input type="file" ref={fileInputRef} onChange={handleFileChange} className="hidden" />
-        {isHost ? (
-          <button onClick={() => fileInputRef.current?.click()} className="h-8 px-4 rounded-xl text-[10px] font-black bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 hover:bg-indigo-500/20 transition-all flex items-center gap-2 uppercase tracking-widest">
-            <i className="fas fa-upload"></i> Share File
+    <div className="h-full flex flex-col bg-[#0b0b0f] overflow-hidden">
+      <div className="h-14 flex items-center justify-between px-6 bg-[#121218] border-b border-white/5 shrink-0">
+        <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Assets Library</span>
+        {isHost && (
+          <button onClick={() => fileInputRef.current?.click()} disabled={isUploading} className="btn-primary h-8 px-4 rounded-xl text-[10px] font-black uppercase text-white disabled:opacity-50">
+            {isUploading ? "Uploading..." : "Share File"}
           </button>
-        ) : (
-          <span className="text-[8px] font-bold text-slate-600 uppercase">View Only</span>
         )}
+        <input type="file" ref={fileInputRef} onChange={handleFileChange} className="hidden" />
       </div>
-      <div className="flex-1 p-4 md:p-6 space-y-3 overflow-y-auto custom-scrollbar">
+      <div className="flex-1 p-4 md:p-6 space-y-3 overflow-y-auto custom-scrollbar scroll-container">
         {files.length === 0 ? (
-          <div className="h-full flex flex-col items-center justify-center text-slate-700 opacity-40">
-            <i className="fas fa-cloud-upload-alt text-4xl mb-4"></i>
-            <p className="text-[10px] uppercase font-bold tracking-[0.3em]">No shared files</p>
+          <div className="h-full flex flex-col items-center justify-center opacity-30 text-slate-500">
+            <i className="fas fa-folder-open text-4xl mb-3"></i>
+            <span className="text-[10px] font-black uppercase tracking-widest">No shared resources</span>
           </div>
         ) : (
           files.map(file => (
-            <div key={file.id} className="group flex items-center justify-between p-4 bg-white/5 rounded-2xl border border-white/5 hover:border-indigo-500/30 transition-all hover:bg-indigo-500/5 shadow-lg">
+            <div key={file.id} className="group flex items-center justify-between p-4 bg-white/5 rounded-2xl border border-white/5 hover:border-indigo-500/30 transition-all">
               <div className="flex items-center gap-4 min-w-0">
                 <div className="w-10 h-10 rounded-xl bg-indigo-500/10 flex items-center justify-center text-indigo-400 shrink-0">
                   <i className="fas fa-file-code"></i>
                 </div>
                 <div className="min-w-0">
                   <h4 className="text-sm font-bold text-slate-200 truncate">{file.name}</h4>
-                  <p className="text-[9px] text-slate-500 uppercase tracking-wider">{file.size} • By {file.uploadedBy}</p>
+                  <p className="text-[9px] text-slate-500 uppercase tracking-wider">{file.size} • By {file.uploaded_by}</p>
                 </div>
               </div>
-              <div className="flex gap-2">
-                <button 
-                  className="w-10 h-10 rounded-xl bg-white/5 hover:bg-indigo-600 text-slate-400 hover:text-white transition-all flex items-center justify-center border border-white/5"
-                  onClick={() => handleDownload(file)}
-                >
-                  <i className="fas fa-download text-xs"></i>
-                </button>
-                {isHost && (
-                  <button 
-                    className="w-10 h-10 rounded-xl bg-red-500/10 hover:bg-red-500 text-red-400 hover:text-white transition-all flex items-center justify-center border border-white/5"
-                    onClick={() => handleDelete(file.id)}
-                  >
-                    <i className="fas fa-trash text-xs"></i>
-                  </button>
-                )}
-              </div>
+              <button onClick={() => handleDownload(file)} className="w-10 h-10 rounded-xl bg-white/5 text-slate-400 hover:bg-indigo-600 hover:text-white transition-all flex items-center justify-center border border-white/5">
+                <i className="fas fa-download text-xs"></i>
+              </button>
             </div>
           ))
         )}

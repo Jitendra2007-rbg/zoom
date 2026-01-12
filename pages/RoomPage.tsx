@@ -38,7 +38,6 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
   const localStreamRef = useRef<MediaStream | null>(null);
   const whiteboardSyncRef = useRef<any>(null);
 
-  // Derive host status strictly from DB data
   const isHost = hostId === user.id;
 
   const iceConfig = {
@@ -95,7 +94,6 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
     if (!roomId) return;
 
     const setupRoom = async () => {
-      // 1. Get Local Media
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
         setLocalStream(stream);
@@ -104,7 +102,6 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
         console.error("Media permission denied", err);
       }
 
-      // 2. Initial Fetch
       const { data, error } = await supabase.from('rooms').select('*').eq('id', roomId).maybeSingle();
       if (error || !data) {
         alert("Room not found");
@@ -117,7 +114,6 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
       setSharedCode(data.shared_code || '');
       setTimeLeft((data.duration_minutes || 60) * 60);
 
-      // 3. Join logic: Add self to participants if not already there
       const currentParticipants: User[] = data.participants || [];
       const amIAlreadyIn = currentParticipants.some(p => p.id === user.id);
       
@@ -127,9 +123,7 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
           role: data.host_id === user.id ? 'host' : 'editor' 
         };
         const updatedParticipants = [...currentParticipants, myUser];
-        // Immediate local set for better UX
         setParticipants(updatedParticipants);
-        // Sync to DB
         await syncRoomState(roomId, { participants: updatedParticipants });
       } else {
         setParticipants(currentParticipants);
@@ -138,7 +132,6 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
 
     setupRoom();
 
-    // Channel for Real-time DB Updates (Lock, End Session, Global Code Sync)
     const roomDbChannel = supabase
       .channel(`room_state_${roomId}`)
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'rooms', filter: `id=eq.${roomId}` }, (payload) => {
@@ -147,15 +140,12 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
         setIsLocked(updated.is_locked);
         if (updated.participants) setParticipants(updated.participants);
         if (updated.host_id) setHostId(updated.host_id);
-        
-        // Only non-hosts update their shared code from the database state
         if (updated.host_id !== user.id && updated.shared_code !== undefined) {
           setSharedCode(updated.shared_code);
         }
       })
       .subscribe();
 
-    // Channel for Real-time Broadcasts (Video Signals, Typing, Whiteboard)
     const sigChannel = supabase.channel(`sig_${roomId}`);
     whiteboardSyncRef.current = sigChannel;
     
@@ -183,7 +173,6 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
         }
       })
       .on('broadcast', { event: 'typing' }, ({ payload }) => {
-        // High frequency low latency sync for everyone except the sender
         if (payload.senderId !== user.id) {
           setSharedCode(payload.code);
         }
@@ -195,7 +184,8 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
       });
 
     return () => {
-      Object.values(peerConnections.current).forEach(pc => pc.close());
+      // Fix: Explicitly cast to RTCPeerConnection[] to ensure correct typing for Object.values.
+      (Object.values(peerConnections.current) as RTCPeerConnection[]).forEach(pc => pc.close());
       localStreamRef.current?.getTracks().forEach(t => t.stop());
       supabase.removeChannel(roomDbChannel);
       supabase.removeChannel(sigChannel);
@@ -227,7 +217,7 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
           <i className="fas fa-power-off text-3xl text-red-500"></i>
         </div>
         <h1 className="text-4xl font-black mb-4 uppercase tracking-tighter">Session Concluded</h1>
-        <p className="text-slate-400 mb-8 max-w-md">The host has ended this collaborative workspace. All shared state has been preserved in the dashboard history.</p>
+        <p className="text-slate-400 mb-8 max-w-md">The host has ended this collaborative workspace.</p>
         <button onClick={() => navigate('/dashboard')} className="px-10 py-4 bg-indigo-600 rounded-2xl font-bold hover:bg-indigo-500 transition-all shadow-xl shadow-indigo-600/20">Return to Dashboard</button>
       </div>
     );
@@ -268,10 +258,10 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
 
       <div className="flex-1 flex overflow-hidden min-h-0 relative">
         <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} />
-        <main className="flex-1 flex flex-col min-w-0 overflow-hidden relative">
-          <div className="flex-1 min-h-0 overflow-hidden relative bg-[#0b0b0f]">
+        <main className="flex-1 flex flex-col min-w-0 relative">
+          <div className="flex-1 min-h-0 relative bg-[#0b0b0f] overflow-hidden">
             {activeTab === 'people' && (
-              <div className="h-full overflow-y-auto p-6">
+              <div className="h-full overflow-y-auto p-4 md:p-6 custom-scrollbar">
                  <VideoPanel participants={participants} localStream={localStream} remoteStreams={remoteStreams} currentUser={user} hostId={hostId} />
               </div>
             )}
@@ -285,13 +275,11 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
                 onCodeChange={(code) => {
                   if (isHost || !isLocked) {
                     setSharedCode(code);
-                    // Broadcast typing event for immediate feedback
-                    supabase.channel(`sig:${roomId}`).send({ 
+                    supabase.channel(`sig_${roomId}`).send({ 
                       type: 'broadcast', 
                       event: 'typing', 
                       payload: { code, senderId: user.id } 
                     });
-                    // Debounced DB update (handled in supabase.ts)
                     syncRoomState(roomId!, { shared_code: code });
                   }
                 }}
@@ -309,7 +297,7 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
           </div>
           
           {activeTab !== 'people' && (
-            <div className="h-32 shrink-0 border-t border-white/5 bg-black/40 hidden sm:block">
+            <div className="h-28 md:h-32 shrink-0 border-t border-white/5 bg-black/40 overflow-x-auto overflow-y-hidden custom-scrollbar">
               <VideoPanel participants={participants} localStream={localStream} remoteStreams={remoteStreams} currentUser={user} hostId={hostId} compact />
             </div>
           )}
@@ -326,7 +314,6 @@ const RoomPage: React.FC<RoomPageProps> = ({ user }) => {
               navigate('/dashboard');
             }
           } else {
-            // Remove self from participants on leave
             const updated = participants.filter(p => p.id !== user.id);
             await syncRoomState(roomId!, { participants: updated });
             navigate('/dashboard');
